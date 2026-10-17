@@ -40,6 +40,7 @@ route.py  →  service.py  →  repository.py  →  models.py
 
 **DOs**
 - DO: Extend `BaseService` for standard CRUD — see `app/core/service/base.py`
+- Account exception: `AccountService` is standalone; keep its owner-scoped queries, logging metadata, and cache invalidation local rather than inheriting `BaseService`.
 - DO: Use `list_all_cached` / `find_one_cached` when caching a resource — see `app/core/service/base.py`
 - DO: Use `handle_service_exception` in every service try/except — see `app/core/exceptions/exceptions.py`
 - DO: Use `BaseRepository` for list/find/paginate — see `app/core/repository/base.py`

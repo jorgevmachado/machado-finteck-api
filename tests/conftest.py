@@ -3,12 +3,16 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import datetime
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 import redis
 from fastapi.testclient import TestClient
 from sqlalchemy import event
+
+from app.models import utcnow
 
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("REDIS_HOST", "localhost")
@@ -121,3 +125,7 @@ def _mock_db_time(*, model, time=datetime(2024, 1, 1)):
 @pytest.fixture
 def mock_db_time():
     return _mock_db_time
+
+@pytest.fixture
+def user():
+    return SimpleNamespace(id=uuid4(), username="test-user", created_at=utcnow())
