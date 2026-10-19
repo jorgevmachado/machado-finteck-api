@@ -50,6 +50,7 @@ The project was built with FastAPI, async SQLAlchemy, and domain-driven architec
 
 Main points:
 - Domain structure: each feature lives in `app/domain/<feature>` with route, service, repository, and schema layers.
+- Domain guides: [Account](app/domain/account/README.md) and [Payer](app/domain/payer/README.md).
 - Async persistence: async SQLAlchemy with engine configured in `app/core/database.py`.
 - Settings: environment variables via Pydantic Settings in `app/core/settings.py`.
 - Authentication: JWT with password hashing using `pwdlib[argon2]`.
@@ -90,6 +91,24 @@ Below is a summary of the main API routes for each service, with a brief explana
 ### Auth Service
 - `POST /auth/login` — Authenticate user and return JWT token
 - `POST /auth/register` — Register a new user
+
+### Account Service
+- `POST /accounts` — Create an account for the authenticated user
+- `GET /accounts` — List the authenticated user's accounts
+- `GET /accounts/{account_id}` — Get an owned account
+- `PUT /accounts/{account_id}` — Update an owned account
+- `DELETE /accounts/{account_id}` — Delete an owned account
+
+See the [Account domain guide](app/domain/account/README.md).
+
+### Payer Service
+- `POST /payers` — Create a payer for the authenticated user
+- `GET /payers` — List the authenticated user's payers
+- `GET /payers/{payer_id}` — Get an owned payer
+- `PUT /payers/{payer_id}` — Update an owned payer
+- `DELETE /payers/{payer_id}` — Delete an owned payer
+
+See the [Payer domain guide](app/domain/payer/README.md).
 
 > For a complete list and details of all endpoints, see the interactive API docs at `/docs` after running the project.
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

@@ -64,6 +64,10 @@ route.py  →  service.py  →  repository.py  →  models.py
 - Error handler: `app/core/exceptions/exceptions.py`
 - Logging helpers: `app/core/logging/logging.py`
 
+## Domain Documentation
+- Account CRUD and ownership rules: `app/domain/account/README.md`
+- Payer CRUD, normalization, and ownership rules: `app/domain/payer/README.md`
+
 ## JIT Index Hints
 ```bash
 # Find all domain routes

@@ -9,6 +9,7 @@ from app.shared.schemas import Message
 
 from app.domain.auth.route import router as auth_router
 from app.domain.account.route import router as account_router
+from app.domain.payer.route import router as payer_router
 
 
 
@@ -19,6 +20,7 @@ add_pagination(app)
 
 app.include_router(auth_router, prefix='/auth', tags=['Auth'])
 app.include_router(account_router, prefix='/accounts', tags=['Accounts'])
+app.include_router(payer_router, prefix="/payers", tags=["Payers"])
 
 @app.get('/', status_code=HTTPStatus.OK, response_model=Message)
 def read_root():
