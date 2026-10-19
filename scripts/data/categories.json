@@ -1,0 +1,57 @@
+[
+  {
+    "name": "Alimentacao",
+    "icon": "utensils",
+    "color": "#F59E0B",
+    "subcategories": [
+      {"name": "Mercado", "icon": "shopping-cart", "color": "#FBBF24", "order": 1},
+      {"name": "Restaurantes", "icon": "restaurant", "color": "#F97316", "order": 2}
+    ]
+  },
+  {
+    "name": "Moradia",
+    "icon": "house",
+    "color": "#3B82F6",
+    "subcategories": [
+      {"name": "Aluguel", "icon": "key", "color": "#60A5FA", "order": 1},
+      {"name": "Manutencao", "icon": "hammer", "color": "#2563EB", "order": 2}
+    ]
+  },
+  {
+    "name": "Transporte",
+    "icon": "car",
+    "color": "#8B5CF6",
+    "subcategories": [
+      {"name": "Combustivel", "icon": "fuel", "color": "#A78BFA", "order": 1},
+      {
+        "name": "Transporte publico",
+        "icon": "bus",
+        "color": "#7C3AED",
+        "order": 2
+      }
+    ]
+  },
+  {
+    "name": "Saude",
+    "icon": "heart-pulse",
+    "color": "#EF4444",
+    "subcategories": [
+      {"name": "Consultas", "icon": "stethoscope", "color": "#F87171", "order": 1},
+      {
+        "name": "Medicamentos",
+        "icon": "pill",
+        "color": "#DC2626",
+        "order": 2
+      }
+    ]
+  },
+  {
+    "name": "Lazer",
+    "icon": "sparkles",
+    "color": "#10B981",
+    "subcategories": [
+      {"name": "Cinema", "icon": "film", "color": "#34D399", "order": 1},
+      {"name": "Viagens", "icon": "plane", "color": "#059669", "order": 2}
+    ]
+  }
+]

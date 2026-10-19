@@ -11,6 +11,7 @@ from app.core.settings import Settings
 
 # Import models so Alembic can see them in table_registry.metadata
 import app.models.auth.user  # noqa: F401
+import app.models.category  # noqa: F401
 
 config = context.config
 config.set_main_option('sqlalchemy.url', Settings().DATABASE_URL)

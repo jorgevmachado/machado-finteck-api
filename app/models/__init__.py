@@ -3,6 +3,8 @@ from app.models.auth import StatusEnum, User, Role, Password, Authentication
 from app.models.account import Account, AccountTypeEnum
 from app.models.payer import Payer
 from app.models.credit_card import CreditCard, CreditCardBrandEnum
+from app.models.category import Category, Subcategory
+
 __all__ = [
     "User",
     "Role",
@@ -14,5 +16,7 @@ __all__ = [
     "Payer",
     "CreditCard",
     "CreditCardBrandEnum",
+    "Category",
+    "Subcategory",
     "utcnow",
 ]

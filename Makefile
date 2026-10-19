@@ -16,6 +16,10 @@ init:
 
 test-app:
 	poetry run pytest -x --cov=app -vv
+test-unit:
+	poetry run pytest -q -m "not integration"
+test-integration:
+	poetry run pytest -q -m integration
 test-coverage:
 	poetry run coverage html
 test:

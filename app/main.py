@@ -11,7 +11,7 @@ from app.domain.auth.route import router as auth_router
 from app.domain.account.route import router as account_router
 from app.domain.payer.route import router as payer_router
 from app.domain.credit_card.route import router as credit_card_router
-
+from app.domain.category.route import router as category_router
 
 
 configure_logging()
@@ -23,6 +23,7 @@ app.include_router(auth_router, prefix='/auth', tags=['Auth'])
 app.include_router(account_router, prefix='/accounts', tags=['Accounts'])
 app.include_router(payer_router, prefix="/payers", tags=["Payers"])
 app.include_router(credit_card_router, prefix="/credit-cards", tags=["Credit Cards"])
+app.include_router(category_router, prefix="/categories", tags=["Categories"])
 
 @app.get('/', status_code=HTTPStatus.OK, response_model=Message)
 def read_root():
