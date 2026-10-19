@@ -1,0 +1,77 @@
+@base_url = http://localhost:8000
+@token = replace-with-a-development-token
+@category_id = replace-with-category-uuid
+@subcategory_id = replace-with-subcategory-uuid
+
+### Seed all default categories for the authenticated user (safe to repeat)
+POST {{base_url}}/categories/seed
+Authorization: Bearer {{token}}
+
+### Create a category and two subcategories
+POST {{base_url}}/categories
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "  Casa   principal ",
+  "icon": "house",
+  "color": "#3B82F6",
+  "subcategories": [
+    {"name": "Aluguel", "icon": "key", "order": 1},
+    {"name": "Manutencao", "icon": "hammer", "order": 2}
+  ]
+}
+
+### List own categories (without page/offset this returns a list)
+GET {{base_url}}/categories?name=Casa%20principal
+Authorization: Bearer {{token}}
+
+### List one page
+GET {{base_url}}/categories?page=1&limit=12
+Authorization: Bearer {{token}}
+
+### Get one category and its live children
+GET {{base_url}}/categories/{{category_id}}
+Authorization: Bearer {{token}}
+
+### Rename only the category, preserving all children
+PUT {{base_url}}/categories/{{category_id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name": "Novo nome"}
+
+### Reconcile retained, new, and omitted children
+PUT {{base_url}}/categories/{{category_id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "icon": null,
+  "subcategories": [
+    {
+      "id": "{{subcategory_id}}",
+      "name": "Aluguel atualizado",
+      "icon": "key",
+      "color": "#60A5FA",
+      "is_active": true,
+      "order": 2
+    },
+    {
+      "name": "Reparos",
+      "icon": "hammer",
+      "order": 1
+    }
+  ]
+}
+
+### Reconcile to an empty child list (logically removes all live children)
+PUT {{base_url}}/categories/{{category_id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"subcategories": []}
+
+### Logically delete a category and its remaining live children
+DELETE {{base_url}}/categories/{{category_id}}
+Authorization: Bearer {{token}}

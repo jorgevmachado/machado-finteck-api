@@ -1,0 +1,159 @@
+[
+  {
+    "name": "Moradia",
+    "icon": "home",
+    "color": "#4A90D9",
+    "subcategories": [
+      {"name": "Aluguel ou Financiamento", "icon": "react-FaBuilding", "color": "#4A90D9", "order": 1},
+      {"name": "Condomínio", "icon": "react-FaBuilding", "color": "#4A90D9", "order": 2},
+      {"name": "Energia Elétrica", "icon": "bolt", "color": "#4A90D9", "order": 3},
+      {"name": "Água e Esgoto", "icon": "react-FaDroplet", "color": "#4A90D9", "order": 4},
+      {"name": "Gás", "icon": "react-FaFire", "color": "#4A90D9", "order": 5},
+      {"name": "Internet e TV", "icon": "react-FaWifi", "color": "#4A90D9", "order": 6},
+      {"name": "Manutenção e Reparos", "icon": "react-FaWrench", "color": "#4A90D9", "order": 7}
+    ]
+  },
+  {
+    "name": "Alimentação",
+    "icon": "react-FaUtensils",
+    "color": "#F5A623",
+    "subcategories": [
+      {"name": "Supermercado", "icon": "store", "color": "#F5A623", "order": 1},
+      {"name": "Restaurantes e Delivery", "icon": "react-FaUtensils", "color": "#F5A623", "order": 2},
+      {"name": "Padaria", "icon": "react-FaBreadSlice", "color": "#F5A623", "order": 3},
+      {"name": "Feira", "icon": "react-FaCarrot", "color": "#F5A623", "order": 4}
+    ]
+  },
+  {
+    "name": "Transporte",
+    "icon": "react-FaCar",
+    "color": "#7ED321",
+    "subcategories": [
+      {"name": "Combustível", "icon": "react-FaGasPump", "color": "#7ED321", "order": 1},
+      {"name": "Transporte Público", "icon": "react-FaBus", "color": "#7ED321", "order": 2},
+      {"name": "Aplicativos de Transporte", "icon": "react-FaTaxi", "color": "#7ED321", "order": 3},
+      {"name": "Estacionamento e Pedágio", "icon": "react-FaSquareParking", "color": "#7ED321", "order": 4},
+      {"name": "Manutenção do Veículo", "icon": "react-FaCar", "color": "#7ED321", "order": 5},
+      {"name": "Seguro do Veículo", "icon": "umbrella", "color": "#7ED321", "order": 6}
+    ]
+  },
+  {
+    "name": "Saúde",
+    "icon": "like",
+    "color": "#D0021B",
+    "subcategories": [
+      {"name": "Plano de Saúde", "icon": "react-FaShieldHeart", "color": "#D0021B", "order": 1},
+      {"name": "Farmácia", "icon": "react-FaPills", "color": "#D0021B", "order": 2},
+      {"name": "Consultas e Exames", "icon": "react-FaStethoscope", "color": "#D0021B", "order": 3},
+      {"name": "Academia e Bem-estar", "icon": "react-FaDumbbell", "color": "#D0021B", "order": 4}
+    ]
+  },
+  {
+    "name": "Educação",
+    "icon": "school",
+    "color": "#9013FE",
+    "subcategories": [
+      {"name": "Mensalidade Escolar", "icon": "school", "color": "#9013FE", "order": 1},
+      {"name": "Cursos e Idiomas", "icon": "book", "color": "#9013FE", "order": 2},
+      {"name": "Material Didático", "icon": "book", "color": "#9013FE", "order": 3},
+      {"name": "Livros", "icon": "book", "color": "#9013FE", "order": 4}
+    ]
+  },
+  {
+    "name": "Lazer",
+    "icon": "gamepad",
+    "color": "#F8E71C",
+    "subcategories": [
+      {"name": "Cinema e Streaming", "icon": "tv", "color": "#F8E71C", "order": 1},
+      {"name": "Viagens", "icon": "map", "color": "#F8E71C", "order": 2},
+      {"name": "Hobbies", "icon": "gamepad", "color": "#F8E71C", "order": 3},
+      {"name": "Eventos e Shows", "icon": "react-FaTicket", "color": "#F8E71C", "order": 4}
+    ]
+  },
+  {
+    "name": "Vestuário",
+    "icon": "react-FaShirt",
+    "color": "#50E3C2",
+    "subcategories": [
+      {"name": "Roupas", "icon": "react-FaShirt", "color": "#50E3C2", "order": 1},
+      {"name": "Calçados", "icon": "react-FaShoePrints", "color": "#50E3C2", "order": 2},
+      {"name": "Acessórios", "icon": "react-FaClock", "color": "#50E3C2", "order": 3}
+    ]
+  },
+  {
+    "name": "Contas e Serviços",
+    "icon": "receipt",
+    "color": "#4A4A4A",
+    "subcategories": [
+      {"name": "Telefone Celular", "icon": "phone", "color": "#4A4A4A", "order": 1},
+      {"name": "Assinaturas Digitais", "icon": "laptop", "color": "#4A4A4A", "order": 2},
+      {"name": "Serviços Domésticos", "icon": "brush", "color": "#4A4A4A", "order": 3},
+      {"name": "Seguros", "icon": "umbrella", "color": "#4A4A4A", "order": 4}
+    ]
+  },
+  {
+    "name": "Cuidados Pessoais",
+    "icon": "brush",
+    "color": "#B8860B",
+    "subcategories": [
+      {"name": "Cabeleireiro e Estética", "icon": "react-FaScissors", "color": "#B8860B", "order": 1},
+      {"name": "Higiene Pessoal", "icon": "shower", "color": "#B8860B", "order": 2},
+      {"name": "Cosméticos", "icon": "brush", "color": "#B8860B", "order": 3}
+    ]
+  },
+  {
+    "name": "Filhos e Família",
+    "icon": "react-FaBaby",
+    "color": "#FF6F91",
+    "subcategories": [
+      {"name": "Creche e Babá", "icon": "react-FaBaby", "color": "#FF6F91", "order": 1},
+      {"name": "Brinquedos", "icon": "box", "color": "#FF6F91", "order": 2},
+      {"name": "Mesada", "icon": "wallet", "color": "#FF6F91", "order": 3},
+      {"name": "Roupas Infantis", "icon": "react-FaShirt", "color": "#FF6F91", "order": 4}
+    ]
+  },
+  {
+    "name": "Pets",
+    "icon": "react-FaPaw",
+    "color": "#8B572A",
+    "subcategories": [
+      {"name": "Ração e Petiscos", "icon": "react-FaBone", "color": "#8B572A", "order": 1},
+      {"name": "Veterinário e Vacinas", "icon": "react-FaSyringe", "color": "#8B572A", "order": 2},
+      {"name": "Banho e Tosa", "icon": "react-FaScissors", "color": "#8B572A", "order": 3},
+      {"name": "Acessórios para Pets", "icon": "react-FaPaw", "color": "#8B572A", "order": 4}
+    ]
+  },
+  {
+    "name": "Financeiro e Investimentos",
+    "icon": "react-FaPiggyBank",
+    "color": "#417505",
+    "subcategories": [
+      {"name": "Poupança", "icon": "react-FaPiggyBank", "color": "#417505", "order": 1},
+      {"name": "Investimentos", "icon": "react-FaChartLine", "color": "#417505", "order": 2},
+      {"name": "Empréstimos e Financiamentos", "icon": "landmark", "color": "#417505", "order": 3},
+      {"name": "Fatura do Cartão de Crédito", "icon": "credit-card", "color": "#417505", "order": 4},
+      {"name": "Taxas e Tarifas Bancárias", "icon": "react-FaPercent", "color": "#417505", "order": 5}
+    ]
+  },
+  {
+    "name": "Presentes e Doações",
+    "icon": "react-FaGift",
+    "color": "#E91E63",
+    "subcategories": [
+      {"name": "Presentes", "icon": "react-FaGift", "color": "#E91E63", "order": 1},
+      {"name": "Doações", "icon": "hand-holding", "color": "#E91E63", "order": 2},
+      {"name": "Celebrações", "icon": "react-FaCakeCandles", "color": "#E91E63", "order": 3}
+    ]
+  },
+  {
+    "name": "Impostos e Taxas",
+    "icon": "landmark",
+    "color": "#607D8B",
+    "subcategories": [
+      {"name": "IPTU", "icon": "home", "color": "#607D8B", "order": 1},
+      {"name": "IPVA", "icon": "react-FaCar", "color": "#607D8B", "order": 2},
+      {"name": "Imposto de Renda", "icon": "document", "color": "#607D8B", "order": 3},
+      {"name": "Taxas Diversas", "icon": "receipt", "color": "#607D8B", "order": 4}
+    ]
+  }
+]

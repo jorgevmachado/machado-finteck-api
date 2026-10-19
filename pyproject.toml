@@ -33,6 +33,11 @@ build-backend = "poetry.core.masonry.api"
 # Disable package mode so Poetry installs only dependencies (avoids "No file/folder found for package" error)
 package-mode = false
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests requiring a disposable PostgreSQL database",
+]
+
 [dependency-groups]
 dev = [
     "ruff (>=0.15.11,<0.16.0)",
