@@ -1,6 +1,6 @@
 # Domain Payer
 
-O domain `payer` gerencia favorecidos, recebedores ou entidades às quais o
+O domain `beneficiary.py` gerencia favorecidos, recebedores ou entidades às quais o
 usuário realiza pagamentos. Ele fornece um CRUD protegido e mantém nomes
 normalizados para evitar cadastros duplicados por usuário.
 
