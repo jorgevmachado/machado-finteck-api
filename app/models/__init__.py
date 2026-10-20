@@ -5,6 +5,7 @@ from app.models.payer import Payer
 from app.models.credit_card import CreditCard, CreditCardBrandEnum
 from app.models.category import Category, Subcategory
 from app.models.beneficiary import Beneficiary
+from app.models.institution import Institution
 
 __all__ = [
     "User",
@@ -20,5 +21,6 @@ __all__ = [
     "Category",
     "Subcategory",
     "Beneficiary",
+    "Institution",
     "utcnow",
 ]
