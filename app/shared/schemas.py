@@ -1,4 +1,6 @@
+from datetime import datetime
 from typing import Any, Optional, TypeVar
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
@@ -51,3 +53,12 @@ class FilterPage(BaseModel):
             {key: value for key, value in updates.items() if value is not None}
         )
         return cls._build_dynamic(payload)
+
+
+class ResponseSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime | None = None
+    deleted_at: datetime | None = None
