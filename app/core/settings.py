@@ -26,3 +26,6 @@ class Settings(BaseSettings):
     POKEAPI_BASE_URL: str = "https://pokeapi.co/api/v2"
     POKEAPI_VERIFY_SSL: bool = False
     POKEAPI_CA_BUNDLE: str | None = None
+    RECEIPT_BATCH_MAX_FILES: int = 10
+    RECEIPT_MAX_FILE_SIZE_MB: int = 10
+    RECEIPT_BATCH_MAX_SIZE_MB: int = 25

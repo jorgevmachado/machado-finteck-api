@@ -1,0 +1,404 @@
+[
+  {
+    "name": "Default",
+    "institution_code": null,
+    "identification_rules": [],
+    "field_rules": [
+      {
+        "field_name": "fine",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Multa\\s*\\(R\\$\\):\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Multa:\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})"
+          ],
+          "parser": "decimal_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "payer",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Pagador\\s*\\nCPF:\\s*[^\\n]+\\nNome:\\s*(?P<value>.+?)(?=\\n|$)",
+            "Nome do pagador:\\s*(?P<value>.+?)(?=\\n|$)",
+            "Dados da conta debitada\\s*\\nNome\\s+(?P<value>.+?)(?=\\n|$)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "barcode",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Código de barras\\s*:?\\s*(?P<value>[\\d\\s]+)",
+            "Representação numérica do código de barras:\\s*(?P<value>[\\d\\s]+)"
+          ],
+          "parser": "text",
+          "normalization": "remove_whitespace",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "due_date",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Data\\s+do\\s+Vencimento:\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})",
+            "Data\\s+de\\s+vencimento:\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})",
+            "Vencimento\\s+(?P<value>\\d{2}/\\d{2}/\\d{4})"
+          ],
+          "parser": "date_numeric_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "discount",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Desconto:\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Desconto\\s*\\(R\\$\\):\\s*(?P<value>[\\d.]+,\\d{2})"
+          ],
+          "parser": "decimal_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "interest",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Juros/Mora:\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Juros\\s*\\(R\\$\\):\\s*(?P<value>[\\d.]+,\\d{2})"
+          ],
+          "parser": "decimal_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "category",
+        "configuration": {
+          "strategy": "not_found"
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "description",
+        "configuration": {
+          "strategy": "not_found"
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "paid_amount",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Comprovante de Pix\\s*\\r?\\n\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Valor pago:\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Valor Pago\\s*\\(R\\$\\):\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Valor\\s+R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Valor\\s+Data\\s*\\r?\\n\\s*\\d{2}/\\d{2}/\\d{2,4}\\s*\\r?\\n\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Valor\\s+Data\\s*\\r?\\n\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})\\s+\\d{2}/\\d{2}/\\d{4}",
+            "R\\$\\s*(?P<value>[\\d.]+,\\d{2})"
+          ],
+          "parser": "decimal_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "beneficiary",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Para\\s*\\r?\\n\\s*(?P<value>[^\\r\\n]+)",
+            "Destino\\s*\\r?\\n\\s*(?:Nome\\s+)?(?P<value>[^\\r\\n]+)",
+            "Favorecido\\s+(?P<value>.+)",
+            "Favoreci\\s+(?P<value>.+)",
+            "Nome do beneficiário:\\s*(?P<value>.+?)(?=\\n|$)",
+            "Beneficiário\\s+(?P<value>.+?)(?=\\s+CNPJ\\b)",
+            "Nome Fantasia:\\s*(?P<value>.+?)(?=\\n|Razão Social:)",
+            "Razão Social:\\s*(?P<value>.+?)(?=\\n|CNPJ:)",
+            "Nome da empresa\\s*\\r?\\n\\s*(?P<value>[^\\r\\n]+)",
+            "Beneficiário original\\s*/\\s*Cedente\\s*\\r?\\nNome fantasia\\s*\\r?\\n\\s*[^\\r\\n]+\\s*\\r?\\nNome\\s*/\\s*Razão social\\s*\\r?\\n\\s*(?P<value>[^\\r\\n]+)",
+            "Dados do recebedor\\s*\\r?\\n\\s*Nome\\s*\\r?\\n\\s*(?P<value>[^\\r\\n]+)",
+            "(?P<value>Fatura do cartão Nubank)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "payment_date",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Pagamento realizado em\\s*:?\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})",
+            "Data do pagamento\\s*:?\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})",
+            "Data\\s+d[ae]\\s+Efetivação\\s*/\\s*Agendamento\\s*:?\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})",
+            "Data\\s+de\\s+d[ée]bito\\s*:?\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})",
+            "Data/\\s*Hora\\s*\\r?\\n\\s*(?P<value>\\d{2}/\\d{2}/\\d{4})\\s*-\\s*\\d{2}:\\d{2}:\\d{2}"
+          ],
+          "parser": "date_numeric_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "total_charges",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Total de encargos:\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})"
+          ],
+          "parser": "decimal_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "authentication",
+        "configuration": {
+          "strategy": "not_found"
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "transaction_id",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "ID da transação:\\s*(?P<value>[a-zA-Z0-9-]+)",
+            "Código da operação:\\s*(?P<value>\\S+)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "effective_payer",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Nome do pagador efetivo:\\s*(?P<value>.+?)(?=\\n|$)",
+            "Pagador Final\\s*/\\s*Efetivo[\\s\\S]*?Nome:\\s*(?P<value>.+?)(?=\\n|Representação numérica)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": "payer"
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "document_amount",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Valor do documento:\\s*R\\$\\s*(?P<value>[\\d.]+,\\d{2})",
+            "Valor Nominal do Boleto:\\s*(?P<value>[\\d.]+,\\d{2})"
+          ],
+          "parser": "decimal_br",
+          "normalization": "strip",
+          "fallback_field": "paid_amount"
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "not_found"
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "destination_institution",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Instituição Emissora:\\s*\\d+\\s*-\\s*(?P<value>.+?)(?=\\n|$)",
+            "Instituição Emissora\\s*-\\s*Nome do Banco:\\s*(?P<value>.+?)(?=\\n|Código do Banco:)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      }
+    ]
+  },
+  {
+    "name": "Nubank",
+    "institution_code": "NUBANK",
+    "identification_rules": [
+      {
+        "pattern": "\\bNU\\s+PAGAMENTOS\\b",
+        "weight": 100
+      },
+      {
+        "pattern": "\\bNUBANK\\.COM\\.BR\\b",
+        "weight": 90
+      },
+      {
+        "pattern": "\\bBANCO\\s+NU\\b",
+        "weight": 80
+      }
+    ],
+    "field_rules": [
+      {
+        "field_name": "due_date",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Vencimento\\s+(?P<value>\\d{2}\\s+[A-Z]{3}\\s+\\d{4})"
+          ],
+          "parser": "date_month_name_pt_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "payment_date",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "(?P<value>[0-9NIL]{2}\\s+[A-Z]{3}\\s+\\d{4})(?:\\s*-\\s*\\d{2}:\\d{2}:\\d{2})?"
+          ],
+          "parser": "date_month_name_pt_br",
+          "normalization": "ocr_day",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "source",
+          "identified_value": "Nubank",
+          "matches": [
+            {"contains": "NU PAGAMENTOS", "value": "Nubank"},
+            {"contains": "NUBANK.COM.BR", "value": "Nubank"}
+          ]
+        },
+        "is_active": true
+      }
+    ]
+  },
+  {
+    "name": "Itaú",
+    "institution_code": "ITAU",
+    "identification_rules": [
+      {
+        "pattern": "\\bITA[ÚU]\\s+UNIBANCO\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bAUTENTICA[ÇC][ÃA]O\\s+DIGITAL\\s+ITA[ÚU]\\b",
+        "weight": 90,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bITAU\\.COM\\.BR\\b",
+        "weight": 80,
+        "is_active": true
+      }
+    ],
+    "field_rules": [
+      {
+        "field_name": "authentication",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Autenticação(?: digital Itaú)?:\\s*(?P<value>[A-Za-z0-9]+)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "source",
+          "identified_value": "Itaú",
+          "matches": [
+            {"contains": "ITAU UNIBANCO", "value": "Itaú"},
+            {"contains": "ITAÚ UNIBANCO", "value": "Itaú"},
+            {"contains": "AUTENTICAÇÃO DIGITAL ITAÚ", "value": "Itaú"}
+          ]
+        },
+        "is_active": true
+      }
+    ]
+  },
+  {
+    "name": "Caixa",
+    "institution_code": "CAIXA",
+    "identification_rules": [
+      {
+        "pattern": "\\bCAIXA\\s+ECON[ÔO]MICA\\s+FEDERAL\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bVIA\\s+INTERNET\\s+BANKING\\s+CAIXA\\b",
+        "weight": 90,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bAL[ÔO]\\s+CAIXA\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bSAC\\s+CAIXA\\b",
+        "weight": 100,
+        "is_active": true
+      }
+    ],
+    "field_rules": [
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "source",
+          "identified_value": "Caixa",
+          "extraction": {
+            "strategy": "regex",
+            "patterns": ["Banco Recebedor:\\s*(?P<value>.+?)(?=\\n|Pagador Final)"],
+            "parser": "text"
+          },
+          "mappings": [
+            {"contains": "CAIXA ECONOMICA FEDERAL", "value": "Caixa"},
+            {"contains": "CAIXA ECONÔMICA FEDERAL", "value": "Caixa"}
+          ]
+        },
+        "is_active": true
+      }
+    ]
+  }
+]
