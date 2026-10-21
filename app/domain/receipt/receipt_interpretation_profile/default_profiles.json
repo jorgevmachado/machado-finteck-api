@@ -1,0 +1,142 @@
+[
+  {
+    "name": "Nubank",
+    "institution_code": "NUBANK",
+    "is_active": true,
+    "identification_rules": [
+      {
+        "pattern": "\\bNU\\s+PAGAMENTOS(?:\\s+S\\.?A\\.?)?\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bNUBANK\\.COM\\.BR\\b",
+        "weight": 90,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bBANCO\\s+NU\\b",
+        "weight": 80,
+        "is_active": true
+      }
+    ],
+    "field_rules": [
+      {
+        "field_name": "due_date",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Vencimento\\s+(?P<value>\\d{2}\\s+[A-Z]{3}\\s+\\d{4})"
+          ],
+          "parser": "date_month_name_pt_br",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "payment_date",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "(?P<value>[0-9NIL]{2}\\s+[A-Z]{3}\\s+\\d{4})(?:\\s*-\\s*\\d{2}:\\d{2}:\\d{2})?"
+          ],
+          "parser": "date_month_name_pt_br",
+          "normalization": "ocr_day",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "constant",
+          "value": "Nubank"
+        },
+        "is_active": true
+      }
+    ]
+  },
+  {
+    "name": "Itau",
+    "institution_code": "ITAU",
+    "is_active": true,
+    "identification_rules": [
+      {
+        "pattern": "\\bITA[ÚU]\\s+UNIBANCO\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bAUTENTICA[ÇC][ÃA]O\\s+DIGITAL\\s+ITA[ÚU]\\b",
+        "weight": 90,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bITAU\\.COM\\.BR\\b",
+        "weight": 80,
+        "is_active": true
+      }
+    ],
+    "field_rules": [
+      {
+        "field_name": "authentication",
+        "configuration": {
+          "strategy": "regex",
+          "patterns": [
+            "Autenticação(?: digital Itaú)?:\\s*(?P<value>[A-Za-z0-9]+)"
+          ],
+          "parser": "text",
+          "normalization": "strip",
+          "fallback_field": null
+        },
+        "is_active": true
+      },
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "constant",
+          "value": "Itaú"
+        },
+        "is_active": true
+      }
+    ]
+  },
+  {
+    "name": "Caixa",
+    "institution_code": "CAIXA",
+    "is_active": true,
+    "identification_rules": [
+      {
+        "pattern": "\\bCAIXA\\s+ECON[ÔO]MICA\\s+FEDERAL\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bVIA\\s+INTERNET\\s+BANKING\\s+CAIXA\\b",
+        "weight": 90,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bAL[ÔO]\\s+CAIXA\\b",
+        "weight": 100,
+        "is_active": true
+      },
+      {
+        "pattern": "\\bSAC\\s+CAIXA\\b",
+        "weight": 100,
+        "is_active": true
+      }
+    ],
+    "field_rules": [
+      {
+        "field_name": "source_institution",
+        "configuration": {
+          "strategy": "constant",
+          "value": "Caixa"
+        },
+        "is_active": true
+      }
+    ]
+  }
+]
