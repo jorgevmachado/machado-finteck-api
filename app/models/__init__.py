@@ -6,6 +6,13 @@ from app.models.credit_card import CreditCard, CreditCardBrandEnum
 from app.models.category import Category, Subcategory
 from app.models.beneficiary import Beneficiary
 from app.models.institution import Institution
+from app.models.receipt import (
+    Receipt,
+    ReceiptFieldRule,
+    ReceiptIdentificationRule,
+    ReceiptInterpretationProfile,
+    ReceiptStatusEnum,
+)
 
 __all__ = [
     "User",
@@ -22,5 +29,10 @@ __all__ = [
     "Subcategory",
     "Beneficiary",
     "Institution",
+    "Receipt",
+    "ReceiptStatusEnum",
+    "ReceiptInterpretationProfile",
+    "ReceiptIdentificationRule",
+    "ReceiptFieldRule",
     "utcnow",
 ]
