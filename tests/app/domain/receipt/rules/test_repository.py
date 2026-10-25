@@ -22,6 +22,30 @@ def sql(query):
     return str(query.compile(dialect=postgresql.dialect())).replace("\n", " ")
 
 
+@pytest.mark.parametrize("is_active", [True, False, None])
+async def test_list_all_filters_activity_without_pagination(
+    rules_session, profile, is_active
+):
+    rules_session.scalars.return_value.all.return_value = [profile]
+    result = await ReceiptRulesRepository(rules_session).list_all(
+        ReceiptRulesFilter(is_active=is_active, scope="private", limit=None),
+        user_id=profile.user_id,
+    )
+    assert result == [profile]
+    query = rules_session.scalars.await_args.args[0]
+    statement = sql(query)
+    assert profile.user_id in query.compile().params.values()
+    assert "user_id =" in statement
+    if is_active is None:
+        assert "is_active IS" not in statement
+    else:
+        assert f"is_active IS {str(is_active).lower()}" in statement
+    assert statement.count("user_id =") == 2
+    assert "deleted_at IS NULL" in statement
+    assert "LIMIT" not in statement
+    assert len(query._with_options) == 2
+
+
 async def test_transaction_commits_once_and_adopts_autobegin(rules_session):
     repo = ReceiptRulesRepository(rules_session)
     async with repo.transaction():
@@ -337,3 +361,54 @@ async def test_lock_seed_is_transaction_scoped(rules_session):
         await repo.lock_seed()
         rules_session.commit.assert_not_awaited()
     assert "pg_advisory_xact_lock" in str(rules_session.execute.await_args.args[0])
+
+
+async def test_save_reconciles_first_field_on_profile_without_existing_fields(
+    rules_session, profile
+):
+    profile.field_rules.clear()
+    entry = ReceiptFieldRuleReconcileSchema(
+        field_name="category", configuration={"strategy": "not_found"}
+    )
+    repo = ReceiptRulesRepository(rules_session)
+    async with repo.transaction():
+        await repo.save(profile, fields=build_reconciliation_plan([entry], []))
+    assert len(profile.field_rules) == 1
+    assert profile.field_rules[0].field_name == "category"
+    assert profile.field_rules[0].profile_id == profile.id
+    assert profile.field_rules[0].deleted_at is None
+
+
+async def test_find_by_name_without_excluded_id_keeps_owner_and_live_filters(
+    rules_session, user
+):
+    await ReceiptRulesRepository(rules_session).find_by_name(
+        name="Bank", user_id=user.id
+    )
+    query = rules_session.scalar.await_args.args[0]
+    statement = sql(query)
+    assert "id !=" not in statement
+    assert "deleted_at IS NULL" in statement
+    assert user.id in query.compile().params.values()
+    assert "Bank" in query.compile().params.values()
+
+
+async def test_save_identification_only_preserves_existing_field_rules(
+    rules_session, profile
+):
+    original_fields = list(profile.field_rules)
+    original_configuration = profile.field_rules[0].configuration.copy()
+    entry = ReceiptIdentificationRuleReconcileSchema(
+        id=profile.identification_rules[0].id, pattern="UPDATED", weight=10
+    )
+    repo = ReceiptRulesRepository(rules_session)
+    async with repo.transaction():
+        await repo.save(
+            profile,
+            identification=build_reconciliation_plan([entry], [entry.id]),
+        )
+    assert profile.field_rules == original_fields
+    assert profile.field_rules[0].configuration == original_configuration
+    assert profile.field_rules[0].deleted_at is None
+    assert profile.identification_rules[0].pattern == "UPDATED"
+    assert profile.identification_rules[0].weight == 10

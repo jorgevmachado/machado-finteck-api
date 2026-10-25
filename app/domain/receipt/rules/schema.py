@@ -90,6 +90,7 @@ class ReceiptRulesUpdateSchema(_InputSchema):
 
 class ReceiptRulesSchema(ResponseSchema):
     name: str
+    is_active: bool
     institution_code: str | None
     scope: ProfileScope
     identification_rules: list[ReceiptIdentificationRuleSchema]
@@ -122,6 +123,7 @@ class ReceiptRulesSchema(ResponseSchema):
 
 class ReceiptRulesFilter(FilterPage):
     limit: int | None = Field(12, ge=1)
+    is_active: bool | None = None
     name: ProfileName | None = None
     institution_code: InstitutionCode | None = None
     scope: ProfileScope | None = None

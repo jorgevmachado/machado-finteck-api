@@ -29,7 +29,7 @@ class SourceExecutionRequest(BaseModel):
     identified: bool
 
 
-def _extract(request: SourceExecutionRequest) -> SourceExtractionResult:
+def extract_source_value(request: SourceExecutionRequest) -> SourceExtractionResult:
     rule = request.rule
     if rule.field_name != "source_institution":
         raise ValueError("Source engine only accepts source_institution")
@@ -108,7 +108,7 @@ def _main() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
     resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
     request = SourceExecutionRequest.model_validate(json.load(sys.stdin))
-    sys.stdout.write(_extract(request).model_dump_json())
+    sys.stdout.write(extract_source_value(request).model_dump_json())
 
 
 if __name__ == "__main__":

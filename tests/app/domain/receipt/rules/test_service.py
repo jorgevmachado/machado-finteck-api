@@ -15,9 +15,43 @@ from app.domain.receipt.rules.schema import (
     ReceiptRulesUpdateSchema,
 )
 from app.domain.receipt.rules.service import ReceiptRulesService
+from app.models import ReceiptFieldRule, ReceiptIdentificationRule, utcnow
 
 pytestmark = pytest.mark.asyncio
 MODULE = "app.domain.receipt.rules.service"
+
+
+async def test_list_all_passes_active_filter_and_preserves_live_children(
+    rules_repository, user, profile
+):
+    inactive = ReceiptIdentificationRule(
+        profile_id=profile.id, pattern="inactive", weight=100, is_active=False
+    )
+    deleted = ReceiptIdentificationRule(
+        profile_id=profile.id, pattern="deleted", weight=100
+    )
+    deleted.deleted_at = utcnow()
+    profile.identification_rules.extend([inactive, deleted])
+    profile.field_rules.append(
+        ReceiptFieldRule(
+            profile_id=profile.id,
+            field_name="category",
+            configuration={"strategy": "not_found"},
+            is_active=False,
+        )
+    )
+    rules_repository.list_all.return_value = [profile]
+
+    filters = ReceiptRulesFilter(is_active=True, scope="private", limit=None)
+    result = await ReceiptRulesService(rules_repository).list_all(filters, user)
+
+    rules_repository.list_all.assert_awaited_once_with(
+        filters,
+        user_id=user.id,
+    )
+    assert len(result) == 1
+    assert [rule.pattern for rule in result[0].identification_rules] == ["BANK", "inactive"]
+    assert [rule.field_name for rule in result[0].field_rules] == ["payer", "category"]
 
 
 async def test_create_owns_nested_aggregate_and_logs_only_after_commit(
