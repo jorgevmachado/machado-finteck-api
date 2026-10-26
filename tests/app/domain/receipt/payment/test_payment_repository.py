@@ -362,11 +362,11 @@ async def test_dashboard_summary_returns_aggregates_and_scopes_query(
             "beneficiary_id",
         ),
         (
-            "dashboard_categories",
+            "dashboard_subcategories",
             "subcategory_id",
             "subcategories",
             "name",
-            "category_id",
+            "subcategory_id",
         ),
         ("dashboard_payers", "payer_id", "payers", "name", "payer_id"),
     ],
@@ -397,8 +397,7 @@ async def test_dashboard_groups_serialize_rows_and_apply_optional_filters(
     assert_owner_and_dates(query, user.id, start, end)
     assert identifier in compiled.params.values()
     assert "source_bank" in compiled.params.values()
-    expected_field = "subcategory_id" if filter_field == "category_id" else filter_field
-    assert f"payments.{expected_field} =" in sql
+    assert f"payments.{filter_field} =" in sql
     assert "GROUP BY" in sql
     if method == "dashboard_monthly":
         assert "to_char(payments.payment_date" in sql
@@ -422,7 +421,7 @@ async def test_dashboard_groups_serialize_rows_and_apply_optional_filters(
         "dashboard_monthly",
         "dashboard_institutions",
         "dashboard_beneficiaries",
-        "dashboard_categories",
+        "dashboard_subcategories",
         "dashboard_payers",
     ],
 )

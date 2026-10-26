@@ -204,7 +204,7 @@ class PaymentRepository(BaseRepository[Payment]):
         end_date: date,
         institution: str | None = None,
         payer_id: UUID | None = None,
-        category_id: UUID | None = None,
+        subcategory_id: UUID | None = None,
         beneficiary_id: UUID | None = None,
     ):
         query = query.where(
@@ -221,8 +221,8 @@ class PaymentRepository(BaseRepository[Payment]):
         if beneficiary_id:
             query = query.where(Payment.beneficiary_id == beneficiary_id)
 
-        if category_id:
-            query = query.where(Payment.subcategory_id == category_id)
+        if subcategory_id:
+            query = query.where(Payment.subcategory_id == subcategory_id)
 
         if payer_id:
             query = query.where(Payment.payer_id == payer_id)
@@ -384,13 +384,13 @@ class PaymentRepository(BaseRepository[Payment]):
             for row in result
         ]
 
-    async def dashboard_categories(
+    async def dashboard_subcategories(
         self,
         user_id: UUID,
         start_date: date,
         end_date: date,
         institution: str | None = None,
-        category_id: UUID | None = None,
+        subcategory_id: UUID | None = None,
     ):
         query = select(
             Subcategory.id.label("subcategory_id"),
@@ -405,7 +405,7 @@ class PaymentRepository(BaseRepository[Payment]):
             start_date=start_date,
             end_date=end_date,
             institution=institution,
-            category_id=category_id,
+            subcategory_id=subcategory_id,
         )
 
         query = query.group_by(Subcategory.id, Subcategory.name).order_by(

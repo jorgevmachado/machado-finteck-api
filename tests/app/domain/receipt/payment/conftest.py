@@ -8,6 +8,7 @@ import pytest
 
 from app.domain.receipt.payment.repository import PaymentRepository
 from app.domain.receipt.payment.service import PaymentService
+from app.domain.receipt.payment.schema import PaymentDashboardRequestSchema
 from app.models import Payment, ReceiptStatusEnum, utcnow
 
 
@@ -79,3 +80,66 @@ def payment_output(payment):
         ),
         created_at=payment.created_at,
     )
+
+
+@pytest.fixture
+def dashboard_params():
+    return PaymentDashboardRequestSchema(
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31),
+        institution="Source Bank",
+        beneficiary_id=uuid4(),
+        subcategory_id=uuid4(),
+        payer_id=uuid4(),
+    )
+
+
+@pytest.fixture
+def dashboard_data():
+    return {
+        "summary": {
+            "total": Decimal("123.45"),
+            "count": 1,
+            "average": Decimal("123.45"),
+            "highest": Decimal("123.45"),
+        },
+        "monthly": [{"period": "2026-10", "total": Decimal("123.45"), "count": 1}],
+        "institutions": [
+            {"institution": "source_bank", "total": Decimal("123.45"), "count": 1}
+        ],
+        "beneficiaries": [
+            {
+                "beneficiary_id": uuid4(),
+                "name": "Beneficiary",
+                "total": Decimal("123.45"),
+                "count": 1,
+            }
+        ],
+        "subcategories": [
+            {
+                "subcategory_id": uuid4(),
+                "name": "Groceries",
+                "total": Decimal("123.45"),
+                "count": 1,
+            }
+        ],
+        "payers": [
+            {
+                "payer_id": uuid4(),
+                "name": "Payer",
+                "total": Decimal("123.45"),
+                "count": 1,
+            }
+        ],
+    }
+
+
+@pytest.fixture
+def dashboard_response(dashboard_data, dashboard_params):
+    return {
+        **dashboard_data,
+        "period": {
+            "start_date": dashboard_params.start_date,
+            "end_date": dashboard_params.end_date,
+        },
+    }

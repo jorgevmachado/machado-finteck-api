@@ -3,7 +3,11 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from app.domain.receipt.payment.schema import PaymentSchema
+from app.domain.receipt.payment.schema import (
+    PaymentSchema,
+    PaymentDashboardRequestSchema,
+    PaymentDashboardResponseSchema,
+)
 
 
 @pytest.mark.parametrize("with_optional_fields", [False, True])
@@ -48,3 +52,64 @@ def test_schema_rejects_incomplete_or_invalid_payment(payment_output, field, val
         PaymentSchema.model_validate(payment_output)
 
     assert caught.value.errors()[0]["loc"][0] == field
+
+
+def test_dashboard_response_serializes_nested_identifiers_money_and_dates(
+    dashboard_response, dashboard_params
+):
+    result = PaymentDashboardResponseSchema.model_validate(dashboard_response)
+    serialized = result.model_dump(mode="json")
+
+    assert serialized["period"] == {
+        "start_date": dashboard_params.start_date.isoformat(),
+        "end_date": dashboard_params.end_date.isoformat(),
+    }
+    assert serialized["summary"]["total"] == "123.45"
+    for group, identifier in (
+        ("subcategories", "subcategory_id"),
+        ("payers", "payer_id"),
+        ("beneficiaries", "beneficiary_id"),
+    ):
+        assert serialized[group][0][identifier] == str(
+            dashboard_response[group][0][identifier]
+        )
+        assert serialized[group][0]["total"] == "123.45"
+    assert serialized["monthly"][0]["period"] == "2026-10"
+    assert serialized["institutions"][0]["institution"] == "source_bank"
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("summary", "total", "invalid"),
+        ("subcategories", "subcategory_id", "invalid"),
+        ("beneficiaries", "beneficiary_id", "invalid"),
+        ("payers", "payer_id", "invalid"),
+    ],
+)
+def test_dashboard_response_rejects_invalid_nested_data(
+    dashboard_response, section, field, value
+):
+    target = dashboard_response[section]
+    if isinstance(target, list):
+        target = target[0]
+    target[field] = value
+
+    with pytest.raises(ValidationError) as caught:
+        PaymentDashboardResponseSchema.model_validate(dashboard_response)
+
+    assert caught.value.errors()[0]["loc"][0] == section
+
+
+def test_dashboard_request_parses_filters_and_defaults(dashboard_params):
+    result = PaymentDashboardRequestSchema.model_validate(
+        dashboard_params.model_dump(mode="json")
+    )
+    assert result == dashboard_params
+    unfiltered = PaymentDashboardRequestSchema(
+        start_date="2026-01-01", end_date="2026-12-31"
+    )
+    assert unfiltered.institution is None
+    assert unfiltered.payer_id is None
+    assert unfiltered.subcategory_id is None
+    assert unfiltered.beneficiary_id is None

@@ -9,7 +9,11 @@ from fastapi_pagination import LimitOffsetParams
 from app.core.pagination import CustomLimitOffsetPage
 from app.core.security import get_current_user
 from app.domain.receipt.payment.route import payment_service, router
-from app.domain.receipt.payment.schema import PaymentSchema
+from app.domain.receipt.payment.schema import (
+    PaymentSchema,
+    PaymentDashboardResponseSchema,
+    PaymentDashboardRequestSchema,
+)
 from app.domain.receipt.payment.service import PaymentService
 
 
@@ -136,7 +140,10 @@ def test_routes_reject_invalid_parameters(payment_client, route_service, suffix)
     route_service.find_one.assert_not_awaited()
 
 
-@pytest.mark.parametrize("suffix", ["", f"/{uuid4()}"])
+@pytest.mark.parametrize(
+    "suffix",
+    ["", f"/{uuid4()}", "/dashboard?start_date=2026-01-01&end_date=2026-12-31"],
+)
 def test_routes_require_authentication(payment_app, route_service, suffix):
     with TestClient(payment_app) as client:
         response = client.get(f"/receipts/payments{suffix}")
@@ -144,3 +151,61 @@ def test_routes_require_authentication(payment_app, route_service, suffix):
     assert response.status_code in (401, 403)
     route_service.list_all.assert_not_awaited()
     route_service.find_one.assert_not_awaited()
+    route_service.get_dashboard.assert_not_awaited()
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+def test_dashboard_route_validates_query_and_returns_response(
+    payment_client, route_service, user, dashboard_params, dashboard_response, filtered
+):
+    if not filtered:
+        dashboard_params = PaymentDashboardRequestSchema(
+            start_date=dashboard_params.start_date, end_date=dashboard_params.end_date
+        )
+    expected = PaymentDashboardResponseSchema.model_validate(dashboard_response)
+    route_service.get_dashboard.return_value = expected
+
+    response = payment_client.get(
+        "/receipts/payments/dashboard",
+        params=dashboard_params.model_dump(mode="json", exclude_none=True),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == expected.model_dump(mode="json")
+    route_service.get_dashboard.assert_awaited_once_with(
+        params=dashboard_params, user=user
+    )
+    route_service.find_one.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {},
+        {"start_date": "invalid", "end_date": "2026-12-31"},
+        {"start_date": "2026-01-01", "end_date": "invalid"},
+        *[
+            {"start_date": "2026-01-01", "end_date": "2026-12-31", key: "invalid"}
+            for key in ("payer_id", "subcategory_id", "beneficiary_id")
+        ],
+    ],
+)
+def test_dashboard_route_rejects_invalid_query(payment_client, route_service, invalid):
+    response = payment_client.get("/receipts/payments/dashboard", params=invalid)
+
+    assert response.status_code == 422
+    route_service.get_dashboard.assert_not_awaited()
+
+
+def test_dashboard_route_preserves_service_error(
+    payment_client, route_service, dashboard_params
+):
+    route_service.get_dashboard.side_effect = HTTPException(503, "Service unavailable")
+
+    response = payment_client.get(
+        "/receipts/payments/dashboard",
+        params=dashboard_params.model_dump(mode="json", exclude_none=True),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service unavailable"}

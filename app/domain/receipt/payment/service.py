@@ -16,10 +16,22 @@ from app.core.logging import LoggingParams, log_service_success
 from app.core.pagination import CustomLimitOffsetPage
 
 from app.domain.receipt.payment.repository import PaymentRepository
+from app.domain.receipt.payment.schema import (
+    PaymentDashboardResponseSchema,
+    PaymentDashboardPayerSchema,
+    PaymentDashboardPeriodSchema,
+    PaymentDashboardSummarySchema,
+    PaymentDashboardMonthlySchema,
+    PaymentDashboardSubcategorySchema,
+    PaymentDashboardInstitutionSchema,
+    PaymentDashboardBeneficiarySchema,
+    PaymentDashboardRequestSchema,
+)
 from app.models import User, Payment
 from app.shared.schemas import FilterPage
 
 logger = logging.getLogger(__name__)
+
 
 class PaymentService:
     def __init__(self, repository: PaymentRepository):
@@ -35,7 +47,7 @@ class PaymentService:
 
     @asynccontextmanager
     async def _operation(
-            self, operation: str, user_request: str, target_id: UUID | None = None
+        self, operation: str, user_request: str, target_id: UUID | None = None
     ) -> AsyncIterator[None]:
         try:
             yield
@@ -60,9 +72,7 @@ class PaymentService:
         self, page_filter: FilterPage, user: User
     ) -> list[Payment] | CustomLimitOffsetPage[Payment]:
         async with self._operation("list_all", user.username):
-            return await self.repository.list_all(
-                page_filter=page_filter.with_updates(user_id=user.id)
-            )
+            return await self.repository.list(user_id=user.id, page_filter=page_filter)
 
     async def find_one(self, payment_id: UUID, user: User) -> Payment:
         async with self._operation("find_one", user.username, payment_id):
@@ -81,7 +91,9 @@ class PaymentService:
     async def check_receipt(self, receipt_id: UUID, user: User) -> None:
         user_id, username = user.id, user.username
         async with self._operation("check_receipt", username, None):
-            payment = await self.repository.find_by(receipt_id=receipt_id, user_id=user_id)
+            payment = await self.repository.find_by(
+                receipt_id=receipt_id, user_id=user_id
+            )
             if payment is not None:
                 raise HTTPException(
                     status_code=HTTPStatus.CONFLICT,
@@ -89,29 +101,140 @@ class PaymentService:
                 )
 
     async def create(
-            self,
-            user: User,
-            payer_id: UUID,
-            receipt_id: UUID,
-            amount: Decimal,
-            payment_date: date,
-            beneficiary_id: UUID,
-            subcategory_id: UUID,
-            source_institution_id: UUID,
-            description: str | None,
-            destination_institution_id: UUID | None,
+        self,
+        user: User,
+        payer_id: UUID,
+        receipt_id: UUID,
+        amount: Decimal,
+        payment_date: date,
+        beneficiary_id: UUID,
+        subcategory_id: UUID,
+        source_institution_id: UUID,
+        description: str | None,
+        destination_institution_id: UUID | None,
     ) -> Payment:
         user_id, username = user.id, user.username
         async with self._operation("create", username, None):
-            return await self.repository.save(entity=Payment(
-                user_id=user_id,
-                payer_id=payer_id,
-                receipt_id=receipt_id,
-                amount=amount,
-                payment_date=payment_date,
-                beneficiary_id=beneficiary_id,
-                subcategory_id=subcategory_id,
-                source_institution_id=source_institution_id,
-                description=description,
-                destination_institution_id=destination_institution_id
-            ))
+            return await self.repository.save(
+                entity=Payment(
+                    user_id=user_id,
+                    payer_id=payer_id,
+                    receipt_id=receipt_id,
+                    amount=amount,
+                    payment_date=payment_date,
+                    beneficiary_id=beneficiary_id,
+                    subcategory_id=subcategory_id,
+                    source_institution_id=source_institution_id,
+                    description=description,
+                    destination_institution_id=destination_institution_id,
+                )
+            )
+
+    async def get_dashboard(
+        self,
+        params: PaymentDashboardRequestSchema,
+        user: User,
+    ) -> PaymentDashboardResponseSchema:
+        summary = await self.repository.dashboard_summary(
+            user_id=user.id,
+            end_date=params.end_date,
+            start_date=params.start_date,
+            institution=params.institution,
+            beneficiary_id=params.beneficiary_id,
+        )
+
+        monthly = await self.repository.dashboard_monthly(
+            user_id=user.id,
+            start_date=params.start_date,
+            end_date=params.end_date,
+            institution=params.institution,
+            beneficiary_id=params.beneficiary_id,
+        )
+
+        institutions = await self.repository.dashboard_institutions(
+            user_id=user.id,
+            start_date=params.start_date,
+            end_date=params.end_date,
+            institution=params.institution,
+            beneficiary_id=params.beneficiary_id,
+        )
+
+        beneficiaries = await self.repository.dashboard_beneficiaries(
+            user_id=user.id,
+            start_date=params.start_date,
+            end_date=params.end_date,
+            institution=params.institution,
+            beneficiary_id=params.beneficiary_id,
+        )
+
+        payers = await self.repository.dashboard_payers(
+            user_id=user.id,
+            start_date=params.start_date,
+            end_date=params.end_date,
+            institution=params.institution,
+            payer_id=params.payer_id,
+        )
+
+        subcategories = await self.repository.dashboard_subcategories(
+            user_id=user.id,
+            start_date=params.start_date,
+            end_date=params.end_date,
+            institution=params.institution,
+            subcategory_id=params.subcategory_id,
+        )
+
+        return PaymentDashboardResponseSchema(
+            payers=[
+                PaymentDashboardPayerSchema(
+                    payer_id=item["payer_id"],
+                    name=item["name"],
+                    total=item["total"],
+                    count=item["count"],
+                )
+                for item in payers
+            ],
+            period=PaymentDashboardPeriodSchema(
+                start_date=params.start_date,
+                end_date=params.end_date,
+            ),
+            summary=PaymentDashboardSummarySchema(
+                total=summary["total"],
+                count=summary["count"],
+                average=summary["average"],
+                highest=summary["highest"],
+            ),
+            monthly=[
+                PaymentDashboardMonthlySchema(
+                    period=item["period"],
+                    total=item["total"],
+                    count=item["count"],
+                )
+                for item in monthly
+            ],
+            subcategories=[
+                PaymentDashboardSubcategorySchema(
+                    subcategory_id=item["subcategory_id"],
+                    name=item["name"],
+                    total=item["total"],
+                    count=item["count"],
+                )
+                for item in subcategories
+            ],
+            institutions=[
+                PaymentDashboardInstitutionSchema(
+                    institution=item["institution"],
+                    total=item["total"],
+                    count=item["count"],
+                )
+                for item in institutions
+            ],
+            beneficiaries=[
+                PaymentDashboardBeneficiarySchema(
+                    beneficiary_id=item["beneficiary_id"],
+                    name=item["name"],
+                    total=item["total"],
+                    count=item["count"],
+                )
+                for item in beneficiaries
+            ],
+        )

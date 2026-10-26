@@ -10,7 +10,11 @@ from app.core.pagination import CustomLimitOffsetPage
 from app.core.security import get_current_user
 
 from app.domain.receipt.payment.service import PaymentService
-from app.domain.receipt.payment.schema import PaymentSchema
+from app.domain.receipt.payment.schema import (
+    PaymentSchema,
+    PaymentDashboardResponseSchema,
+    PaymentDashboardRequestSchema,
+)
 
 from app.models import User
 from app.shared.schemas import FilterPage
@@ -36,6 +40,7 @@ def payment_filter(
 
 Service = Annotated[PaymentService, Depends(payment_service)]
 
+
 @router.get(
     "",
     response_model=CustomLimitOffsetPage[PaymentSchema] | list[PaymentSchema],
@@ -47,6 +52,19 @@ async def list_all(
     page_filter: Annotated[FilterPage, Depends(payment_filter)],
 ):
     return await service.list_all(page_filter=page_filter, user=current_user)
+
+
+@router.get(
+    "/dashboard",
+    response_model=PaymentDashboardResponseSchema,
+    status_code=HTTPStatus.OK,
+)
+async def get_dashboard(
+    params: Annotated[PaymentDashboardRequestSchema, Query()],
+    service: Service,
+    current_user: CurrentUser,
+):
+    return await service.get_dashboard(params=params, user=current_user)
 
 
 @router.get("/{payment_id}", response_model=PaymentSchema, status_code=HTTPStatus.OK)

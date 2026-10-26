@@ -9,6 +9,10 @@ from fastapi_pagination import LimitOffsetParams
 from app.core.exceptions import handle_service_exception
 from app.core.pagination import CustomLimitOffsetPage
 from app.domain.receipt.payment.repository import PaymentRepository
+from app.domain.receipt.payment.schema import (
+    PaymentDashboardRequestSchema,
+    PaymentDashboardResponseSchema,
+)
 from app.domain.receipt.payment.service import PaymentService
 from app.models import Payment
 from app.shared.schemas import FilterPage
@@ -27,7 +31,7 @@ async def test_from_session_binds_repository():
 
 
 @pytest.mark.parametrize("paginated", [False, True])
-async def test_list_all_overrides_owner_without_mutating_filter(
+async def test_list_all_passes_owner_separately_without_mutating_filter(
     payment_service, payment_repository, payment, user, paginated
 ):
     page_filter = FilterPage.build(limit=2, offset=0, user_id=uuid4())
@@ -38,16 +42,14 @@ async def test_list_all_overrides_owner_without_mutating_filter(
         if paginated
         else [payment]
     )
-    payment_repository.list_all.return_value = expected
+    payment_repository.list.return_value = expected
 
     result = await payment_service.list_all(page_filter, user)
 
     assert result is expected
-    payment_repository.list_all.assert_awaited_once()
-    scoped = payment_repository.list_all.await_args.kwargs["page_filter"]
-    assert scoped.user_id == user.id
-    assert scoped.limit == page_filter.limit
-    assert scoped.offset == page_filter.offset
+    payment_repository.list.assert_awaited_once_with(
+        user_id=user.id, page_filter=page_filter
+    )
     assert page_filter.user_id != user.id
 
 
@@ -135,7 +137,7 @@ async def test_create_persists_all_fields_and_returns_saved_payment(
 @pytest.mark.parametrize(
     ("operation", "repository_method"),
     [
-        ("list_all", "list_all"),
+        ("list_all", "list"),
         ("find_one", "find_by"),
         ("find_by", "find_by"),
         ("check_receipt", "find_by"),
@@ -174,3 +176,86 @@ async def test_repository_failures_are_logged_and_propagated(
     assert error.call_args.args[0] is exception
     assert error.call_args.kwargs["operation"] == operation
     assert error.call_args.kwargs["user_request"] == user.username
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+async def test_dashboard_scopes_queries_and_builds_response(
+    payment_service,
+    payment_repository,
+    user,
+    dashboard_params,
+    dashboard_data,
+    dashboard_response,
+    filtered,
+    empty,
+):
+    if not filtered:
+        dashboard_params = PaymentDashboardRequestSchema(
+            start_date=dashboard_params.start_date, end_date=dashboard_params.end_date
+        )
+    if empty:
+        dashboard_data["summary"] = {"total": 0, "count": 0, "average": 0, "highest": 0}
+        dashboard_response["summary"] = dashboard_data["summary"]
+        for key in (
+            "monthly",
+            "institutions",
+            "beneficiaries",
+            "subcategories",
+            "payers",
+        ):
+            dashboard_data[key] = []
+            dashboard_response[key] = []
+    for key, value in dashboard_data.items():
+        getattr(payment_repository, f"dashboard_{key}").return_value = value
+
+    result = await payment_service.get_dashboard(dashboard_params, user)
+
+    assert isinstance(result, PaymentDashboardResponseSchema)
+    assert result == PaymentDashboardResponseSchema.model_validate(dashboard_response)
+    common = {
+        "user_id": user.id,
+        "start_date": dashboard_params.start_date,
+        "end_date": dashboard_params.end_date,
+        "institution": dashboard_params.institution,
+    }
+    for key in ("summary", "monthly", "institutions", "beneficiaries"):
+        getattr(payment_repository, f"dashboard_{key}").assert_awaited_once_with(
+            **common, beneficiary_id=dashboard_params.beneficiary_id
+        )
+    payment_repository.dashboard_payers.assert_awaited_once_with(
+        **common, payer_id=dashboard_params.payer_id
+    )
+    payment_repository.dashboard_subcategories.assert_awaited_once_with(
+        **common, subcategory_id=dashboard_params.subcategory_id
+    )
+
+
+@pytest.mark.parametrize(
+    "failed_method",
+    ["summary", "monthly", "institutions", "beneficiaries", "payers", "subcategories"],
+)
+async def test_dashboard_propagates_repository_errors_and_stops_remaining_queries(
+    payment_service,
+    payment_repository,
+    user,
+    dashboard_params,
+    failed_method,
+):
+    methods = [
+        "summary",
+        "monthly",
+        "institutions",
+        "beneficiaries",
+        "payers",
+        "subcategories",
+    ]
+    exception = RuntimeError("database failure")
+    getattr(payment_repository, f"dashboard_{failed_method}").side_effect = exception
+
+    with pytest.raises(RuntimeError) as caught:
+        await payment_service.get_dashboard(dashboard_params, user)
+
+    assert caught.value is exception
+    for method in methods[methods.index(failed_method) + 1 :]:
+        getattr(payment_repository, f"dashboard_{method}").assert_not_awaited()
