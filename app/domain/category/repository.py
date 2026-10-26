@@ -69,7 +69,7 @@ class CategoryRepository(BaseRepository[Category]):
         )
         child_loader = selectinload(
             Category.subcategories.and_(Subcategory.deleted_at.is_(None))
-        )
+        ).lazyload(Subcategory.payments)
 
         if not for_update:
             return await self.session.scalar(
@@ -142,7 +142,7 @@ class CategoryRepository(BaseRepository[Category]):
             .options(
                 selectinload(
                     Category.subcategories.and_(Subcategory.deleted_at.is_(None))
-                )
+                ).lazyload(Subcategory.payments)
             )
             .order_by(Category.created_at, Category.id)
         )

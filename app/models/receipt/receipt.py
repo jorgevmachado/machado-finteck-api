@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID, uuid4
+from typing import TYPE_CHECKING
+
 
 from sqlalchemy import DateTime, Enum as SAEnum, String, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database.base import table_registry
+from app.core.database.base import table_registry, default_lazy
 from app.models import utcnow
 from app.models.receipt.enums import ReceiptStatusEnum
+
+if TYPE_CHECKING:
+    from app.models import Payment
 
 
 @table_registry.mapped_as_dataclass
@@ -52,4 +57,12 @@ class Receipt:
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None, init=False
+    )
+
+    payments: Mapped[list["Payment"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="receipt",
     )

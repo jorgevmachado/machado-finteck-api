@@ -639,6 +639,7 @@ async def test_listing_loads_children_in_batches_and_counts_root_categories(
     ]
     assert len(select_statements) == 5
     assert "FROM categories" in select_statements[0]
+    assert all("FROM payments" not in statement for statement in select_statements)
 
 
 @pytest.mark.asyncio
