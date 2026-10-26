@@ -12,6 +12,7 @@ from app.models.receipt import (
     ReceiptInterpretationProfile,
     ReceiptStatusEnum,
     Receipt,
+    Payment
 )
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "ReceiptFieldRule",
     "ReceiptStatusEnum",
     "Receipt",
+    "Payment",
     "utcnow",
 ]

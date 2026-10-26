@@ -18,6 +18,7 @@ from app.domain.receipt.route import (
 from app.domain.receipt.schema import ReceiptSchema
 from app.domain.receipt.service import ReceiptService
 from app.models import ReceiptStatusEnum, utcnow
+from app.shared.schemas import Message
 
 
 @pytest.mark.asyncio
@@ -147,3 +148,61 @@ def test_read_routes_require_authentication(service, path):
     assert response.status_code in (401, 403)
     service.list_all.assert_not_awaited()
     service.find_one.assert_not_awaited()
+
+
+def test_confirm_route_delegates_payload_and_returns_message(
+    receipt_client, service, user, confirm_payload
+):
+    receipt_id = uuid4()
+    service.confirm.return_value = Message(message="Receipt confirmed successfully")
+
+    response = receipt_client.post(
+        f"/receipts/{receipt_id}/confirm", json=confirm_payload.model_dump(mode="json")
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Receipt confirmed successfully"}
+    service.confirm.assert_awaited_once_with(
+        receipt_id=receipt_id, user=user, payload=confirm_payload
+    )
+
+
+@pytest.mark.parametrize("status", [404, 409, 500])
+def test_confirm_route_preserves_service_errors(
+    receipt_client, service, confirm_payload, status
+):
+    service.confirm.side_effect = HTTPException(status, "Confirmation failed")
+
+    response = receipt_client.post(
+        f"/receipts/{uuid4()}/confirm", json=confirm_payload.model_dump(mode="json")
+    )
+
+    assert response.status_code == status
+    assert response.json() == {"detail": "Confirmation failed"}
+
+
+@pytest.mark.parametrize("invalid", ["id", "payload"])
+def test_confirm_route_rejects_invalid_input(
+    receipt_client, service, confirm_payload, invalid
+):
+    receipt_id = "not-a-uuid" if invalid == "id" else str(uuid4())
+    payload = {} if invalid == "payload" else confirm_payload.model_dump(mode="json")
+
+    response = receipt_client.post(f"/receipts/{receipt_id}/confirm", json=payload)
+
+    assert response.status_code == 422
+    service.confirm.assert_not_awaited()
+
+
+def test_confirm_route_requires_authentication(service, confirm_payload):
+    app = FastAPI()
+    app.include_router(router, prefix="/receipts")
+    app.dependency_overrides[receipt_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/receipts/{uuid4()}/confirm", json=confirm_payload.model_dump(mode="json")
+        )
+
+    assert response.status_code in (401, 403)
+    service.confirm.assert_not_awaited()

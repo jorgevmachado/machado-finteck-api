@@ -92,6 +92,20 @@ class CategoryRepository(BaseRepository[Category]):
             .execution_options(populate_existing=True)
         )
 
+    async def find_subcategory_by_id(
+        self, *, subcategory_id: UUID, user_id: UUID
+    ) -> Subcategory | None:
+        return await self.session.scalar(
+            select(Subcategory)
+            .join(Subcategory.category)
+            .where(
+                Subcategory.id == subcategory_id,
+                Subcategory.deleted_at.is_(None),
+                Category.user_id == user_id,
+                Category.deleted_at.is_(None),
+            )
+        )
+
     async def find_by_name(
         self,
         *,

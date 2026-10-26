@@ -158,6 +158,31 @@ class TestCategoryRepositoryTransaction:
 class TestCategoryRepositoryQueries:
     @staticmethod
     @pytest.mark.asyncio
+    async def test_find_subcategory_scopes_owner_and_excludes_deleted_entities(
+        subcategory_entity,
+    ):
+        session = repository_session()
+        session.scalar.return_value = subcategory_entity
+        user_id = uuid4()
+
+        result = await CategoryRepository(session).find_subcategory_by_id(
+            subcategory_id=subcategory_entity.id, user_id=user_id
+        )
+
+        assert result is subcategory_entity
+        query = session.scalar.await_args.args[0]
+        compiled = query.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert "JOIN categories ON categories.id = subcategories.category_id" in sql
+        assert "subcategories.id =" in sql
+        assert "categories.user_id =" in sql
+        assert "subcategories.deleted_at IS NULL" in sql
+        assert "categories.deleted_at IS NULL" in sql
+        assert subcategory_entity.id in compiled.params.values()
+        assert user_id in compiled.params.values()
+
+    @staticmethod
+    @pytest.mark.asyncio
     async def test_missing_locked_root_does_not_reload_children():
         session = repository_session()
         session.scalar.return_value = None

@@ -225,3 +225,12 @@ class InstitutionService:
                 user_request=user.username,
                 raise_exception=True,
             )
+
+    async def resolve(self, user: User, name: str) -> Institution:
+        name_code = to_snake_case(name)
+        entity = await self.find_by(
+            user_id=user.id, name_code=name_code, without_throw=True
+        )
+        if not entity:
+            return await self.create(user=user, payload=InstitutionCreateSchema(name=name))
+        return entity

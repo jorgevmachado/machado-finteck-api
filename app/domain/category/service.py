@@ -94,6 +94,38 @@ class CategoryService:
                 raise_exception=True,
             )
 
+    async def find_subcategory_by_id(
+        self,
+        *,
+        subcategory_id: UUID,
+        user_id: UUID,
+        user_request: str | None = None,
+    ) -> Subcategory:
+        try:
+            result = await self.repository.find_subcategory_by_id(
+                subcategory_id=subcategory_id, user_id=user_id
+            )
+            if result is None:
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND, detail="Subcategory not found"
+                )
+            log_service_success(
+                self.logger_params,
+                operation="find_subcategory_by_id",
+                message="Find Subcategory by id successfully",
+                user_request=user_request,
+            )
+            return result
+        except Exception as exception:
+            handle_service_exception(
+                exception,
+                logger=self.logger_params.logger,
+                service=self.logger_params.service,
+                operation="find_subcategory_by_id",
+                user_request=user_request,
+                raise_exception=True,
+            )
+
     async def create(self, user: User, payload: CategoryCreateSchema) -> Category:
         user_request = user.username
         try:

@@ -225,3 +225,24 @@ class PayerService:
                 user_request=user.username,
                 raise_exception=True,
             )
+
+    async def resolve(self, user: User, name: str) -> Payer:
+        try:
+            name_code = to_snake_case(name)
+            entity = await self.find_by(
+                user_id=user.id, name_code=name_code, without_throw=True
+            )
+            if entity is None:
+                entity = await self.create(
+                    user=user, payload=PayerCreateSchema(name=name)
+                )
+            return entity
+        except Exception as exception:
+            handle_service_exception(
+                exception,
+                logger=self.logger_params.logger,
+                service=self.logger_params.service,
+                operation="resolve",
+                user_request=user.username,
+                raise_exception=True,
+            )

@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import handle_service_exception
 from app.core.logging import LoggingParams, log_service_success
 from app.core.pagination import CustomLimitOffsetPage
+from app.domain.beneficiary.service import BeneficiaryService
+from app.domain.category.service import CategoryService
+from app.domain.institution.service import InstitutionService
+from app.domain.payer.service import PayerService
 from app.domain.receipt.data.schema import ReceiptData
 from app.domain.receipt.extraction.service import ExtractionService
 from app.domain.receipt.file.file import (
@@ -22,12 +26,13 @@ from app.domain.receipt.file.file import (
 )
 from app.domain.receipt.interpretation import Interpretation
 from app.domain.receipt.interpretation.schema import InterpretationResult
+from app.domain.receipt.payment.service import PaymentService
 from app.domain.receipt.repository import ReceiptRepository
 from app.domain.receipt.rules.schema import ReceiptRulesFilter
 from app.domain.receipt.rules.service import ReceiptRulesService
-from app.domain.receipt.schema import ReceiptUploadSchema, BatchReceiptSchema
+from app.domain.receipt.schema import ReceiptUploadSchema, BatchReceiptSchema, ReceiptConfirmSchema
 from app.models import User, Receipt, ReceiptStatusEnum
-from app.shared.schemas import FilterPage
+from app.shared.schemas import FilterPage, Message
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,11 @@ class ReceiptService:
         )
         self.extraction_service = ExtractionService()
         self.rules_service = ReceiptRulesService.from_session(repository.session)
+        self.payment_service = PaymentService.from_session(repository.session)
+        self.payer_service = PayerService.from_session(repository.session)
+        self.beneficiary_service = BeneficiaryService.from_session(repository.session)
+        self.institution_service = InstitutionService.from_session(repository.session)
+        self.category_service = CategoryService.from_session(repository.session)
 
     @classmethod
     def from_session(cls, session: AsyncSession) -> ReceiptService:
@@ -229,3 +239,48 @@ class ReceiptService:
             processed=processed,
             processing=processing,
         )
+
+    async def validate_confirm_receipt(self, receipt_id: UUID, user: User) -> Receipt:
+        username = user.username
+        async with self._operation("validate_confirm_receipt", username):
+            receipt = await self.find_one(receipt_id=receipt_id, user=user)
+            if receipt.status != ReceiptStatusEnum.RECEIVED:
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail="Receipt is not ready for confirmation",
+                )
+            return receipt
+
+    async def confirm(self, receipt_id: UUID, user: User, payload: ReceiptConfirmSchema):
+        username = user.username
+        async with self._operation("confirm", username):
+            receipt = await self.validate_confirm_receipt(receipt_id, user)
+            await self.payment_service.check_receipt(receipt_id, user)
+            payer = await self.payer_service.resolve(user=user, name=payload.payer)
+            beneficiary = await self.beneficiary_service.resolve(user=user, name=payload.beneficiary)
+            source_institution = await self.institution_service.resolve(user=user, name=payload.source_institution)
+
+            subcategory = await self.category_service.find_subcategory_by_id(subcategory_id=payload.subcategory_id, user_id=user.id)
+
+
+            if payload.destination_institution:
+                destination_institution = await self.institution_service.resolve(user=user, name=payload.destination_institution)
+            else:
+                destination_institution = None
+
+            await self.payment_service.create(
+                user=user,
+                payer_id=payer.id,
+                receipt_id=receipt.id,
+                amount=payload.paid_amount,
+                payment_date=payload.payment_date,
+                beneficiary_id=beneficiary.id,
+                subcategory_id=subcategory.id,
+                source_institution_id=source_institution.id,
+                description=payload.description,
+                destination_institution_id=destination_institution.id if destination_institution else None
+            )
+
+            receipt.status = ReceiptStatusEnum.PROCESSED
+            await self.repository.save(entity=receipt)
+            return Message(message="Receipt confirmed successfully")

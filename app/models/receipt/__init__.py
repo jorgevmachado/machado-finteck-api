@@ -5,6 +5,7 @@ from app.models.receipt.receipt_identification_rule import ReceiptIdentification
 from app.models.receipt.receipt_field_rule import ReceiptFieldRule
 from app.models.receipt.enums import ReceiptStatusEnum
 from app.models.receipt.receipt import Receipt
+from app.models.receipt.payment import Payment
 
 __all__ = [
     "ReceiptInterpretationProfile",
@@ -12,4 +13,5 @@ __all__ = [
     "ReceiptFieldRule",
     "ReceiptStatusEnum",
     "Receipt",
+    "Payment",
 ]

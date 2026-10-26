@@ -1,5 +1,6 @@
 from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
 import pytest
@@ -316,6 +317,158 @@ async def test_batch_rejects_excess_files_before_uploading(user, service):
         f"A maximum of {MAX_BATCH_FILES} files can be uploaded at once."
     )
     service.upload.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status", list(ReceiptStatusEnum))
+async def test_validate_confirm_receipt_requires_received_status(
+    service, receipt, user, status
+):
+    receipt.status = status
+    service.repository.find_by.return_value = receipt
+
+    if status == ReceiptStatusEnum.RECEIVED:
+        assert await service.validate_confirm_receipt(receipt.id, user) is receipt
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await service.validate_confirm_receipt(receipt.id, user)
+        assert caught.value.status_code == 409
+        assert caught.value.detail == "Receipt is not ready for confirmation"
+
+    service.repository.find_by.assert_awaited_once_with(id=receipt.id, user_id=user.id)
+    service.repository.save.assert_not_awaited()
+
+
+@pytest.fixture
+def confirmation_service(service, receipt):
+    service.repository.find_by.return_value = receipt
+    service.payment_service = AsyncMock()
+    for name in ("payer_service", "beneficiary_service", "institution_service"):
+        dependency = AsyncMock()
+        dependency.resolve.return_value = SimpleNamespace(id=uuid4())
+        setattr(service, name, dependency)
+    service.category_service = AsyncMock()
+    service.category_service.find_subcategory_by_id.return_value = SimpleNamespace(
+        id=uuid4()
+    )
+    return service
+
+
+@pytest.mark.parametrize("has_destination", [False, True])
+async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
+    confirmation_service, receipt, user, confirm_payload, has_destination
+):
+    service = confirmation_service
+    if not has_destination:
+        confirm_payload.destination_institution = None
+        confirm_payload.description = None
+    source = SimpleNamespace(id=uuid4())
+    destination = SimpleNamespace(id=uuid4())
+    service.institution_service.resolve.side_effect = [source, destination]
+
+    async def create_payment(**kwargs):
+        assert receipt.status == ReceiptStatusEnum.RECEIVED
+        service.repository.save.assert_not_awaited()
+
+    service.payment_service.create.side_effect = create_payment
+
+    result = await service.confirm(receipt.id, user, confirm_payload)
+
+    assert result.message == "Receipt confirmed successfully"
+    service.payment_service.check_receipt.assert_awaited_once_with(receipt.id, user)
+    service.payer_service.resolve.assert_awaited_once_with(
+        user=user, name=confirm_payload.payer
+    )
+    service.beneficiary_service.resolve.assert_awaited_once_with(
+        user=user, name=confirm_payload.beneficiary
+    )
+    service.category_service.find_subcategory_by_id.assert_awaited_once_with(
+        subcategory_id=confirm_payload.subcategory_id, user_id=user.id
+    )
+    assert service.institution_service.resolve.await_args_list == [
+        call(user=user, name=confirm_payload.source_institution),
+        *(
+            [call(user=user, name=confirm_payload.destination_institution)]
+            if has_destination
+            else []
+        ),
+    ]
+    service.payment_service.create.assert_awaited_once_with(
+        user=user,
+        payer_id=service.payer_service.resolve.return_value.id,
+        receipt_id=receipt.id,
+        amount=confirm_payload.paid_amount,
+        payment_date=confirm_payload.payment_date,
+        beneficiary_id=service.beneficiary_service.resolve.return_value.id,
+        subcategory_id=service.category_service.find_subcategory_by_id.return_value.id,
+        source_institution_id=source.id,
+        description=confirm_payload.description,
+        destination_institution_id=destination.id if has_destination else None,
+    )
+    assert receipt.status == ReceiptStatusEnum.PROCESSED
+    service.repository.save.assert_awaited_once_with(entity=receipt)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing",
+        "status",
+        "duplicate",
+        "payer",
+        "beneficiary",
+        "source",
+        "subcategory",
+        "destination",
+        "create",
+        "save",
+    ],
+)
+async def test_confirm_propagates_failures_without_reporting_success(
+    confirmation_service, receipt, user, confirm_payload, failure
+):
+    service = confirmation_service
+    expected_status = 500
+    exception = RuntimeError("database failure")
+    if failure == "missing":
+        service.repository.find_by.return_value = None
+        expected_status = 404
+    elif failure == "status":
+        receipt.status = ReceiptStatusEnum.FAILED
+        expected_status = 409
+    else:
+        dependencies = {
+            "duplicate": service.payment_service.check_receipt,
+            "payer": service.payer_service.resolve,
+            "beneficiary": service.beneficiary_service.resolve,
+            "source": service.institution_service.resolve,
+            "subcategory": service.category_service.find_subcategory_by_id,
+            "destination": service.institution_service.resolve,
+            "create": service.payment_service.create,
+            "save": service.repository.save,
+        }
+        if failure == "duplicate":
+            exception = HTTPException(409, "Receipt already has a payment")
+            expected_status = 409
+        if failure == "destination":
+            dependencies[failure].side_effect = [SimpleNamespace(id=uuid4()), exception]
+        else:
+            dependencies[failure].side_effect = exception
+
+    with (
+        patch(f"{MODULE}.log_service_success") as success,
+        pytest.raises(HTTPException) as caught,
+    ):
+        await service.confirm(receipt.id, user, confirm_payload)
+
+    assert caught.value.status_code == expected_status
+    assert all(
+        entry.kwargs["operation"] != "confirm" for entry in success.call_args_list
+    )
+    if failure not in ("create", "save"):
+        service.payment_service.create.assert_not_awaited()
+    if failure != "save":
+        service.repository.save.assert_not_awaited()
+        assert receipt.status != ReceiptStatusEnum.PROCESSED
 
 
 @pytest.mark.parametrize(

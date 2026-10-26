@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -37,3 +38,24 @@ class BatchReceiptSchema(BaseModel):
     received: int
     processed: int
     processing: int
+
+class ReceiptConfirmSchema(BaseModel):
+    payer: str
+    beneficiary: str
+    paid_amount: Decimal
+    payment_date: date
+    subcategory_id: UUID
+    source_institution: str
+    destination_institution: str | None = None
+
+    fine: Decimal | None = None
+    barcode: str | None = None
+    due_date: date | None = None
+    discount: Decimal | None = None
+    interest: Decimal | None = None
+    description: str | None = None
+    total_charges: Decimal | None = None
+    authentication: str | None = None
+    transaction_id: str | None = None
+    effective_payer: str | None = None
+    document_amount: Decimal | None = None
