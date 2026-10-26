@@ -69,7 +69,7 @@ class CategoryRepository(BaseRepository[Category]):
         )
         child_loader = selectinload(
             Category.subcategories.and_(Subcategory.deleted_at.is_(None))
-        )
+        ).lazyload(Subcategory.payments)
 
         if not for_update:
             return await self.session.scalar(
@@ -90,6 +90,20 @@ class CategoryRepository(BaseRepository[Category]):
             .where(*filters)
             .options(child_loader)
             .execution_options(populate_existing=True)
+        )
+
+    async def find_subcategory_by_id(
+        self, *, subcategory_id: UUID, user_id: UUID
+    ) -> Subcategory | None:
+        return await self.session.scalar(
+            select(Subcategory)
+            .join(Subcategory.category)
+            .where(
+                Subcategory.id == subcategory_id,
+                Subcategory.deleted_at.is_(None),
+                Category.user_id == user_id,
+                Category.deleted_at.is_(None),
+            )
         )
 
     async def find_by_name(
@@ -128,7 +142,7 @@ class CategoryRepository(BaseRepository[Category]):
             .options(
                 selectinload(
                     Category.subcategories.and_(Subcategory.deleted_at.is_(None))
-                )
+                ).lazyload(Subcategory.payments)
             )
             .order_by(Category.created_at, Category.id)
         )

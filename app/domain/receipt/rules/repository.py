@@ -90,6 +90,8 @@ class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
         | CustomLimitOffsetPage[ReceiptInterpretationProfile]
     ):
         conditions = list(self._visibility(user_id))
+        if page_filter.is_active is not None:
+            conditions.append(self.model.is_active.is_(page_filter.is_active))
         if page_filter.name is not None:
             conditions.append(self.model.name == page_filter.name)
         if page_filter.institution_code is not None:

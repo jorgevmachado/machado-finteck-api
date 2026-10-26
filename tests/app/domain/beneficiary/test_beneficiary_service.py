@@ -5,9 +5,63 @@ from uuid import uuid4
 from fastapi import HTTPException
 import pytest
 
-from app.domain.beneficiary.schema import BeneficiaryUpdateSchema
+from app.domain.beneficiary.repository import BeneficiaryRepository
+from app.domain.beneficiary.schema import (
+    BeneficiaryCreateSchema,
+    BeneficiaryUpdateSchema,
+)
 from app.domain.beneficiary.service import BeneficiaryService
 from app.shared.schemas import FilterPage, Message
+
+
+class TestBeneficiaryServiceResolve:
+    @staticmethod
+    def test_from_session_binds_repository():
+        session = AsyncMock()
+        service = BeneficiaryService.from_session(session)
+
+        assert isinstance(service.repository, BeneficiaryRepository)
+        assert service.repository.session is session
+
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exists", [False, True])
+    async def test_resolve_normalizes_lookup_and_creates_only_when_missing(
+        user, beneficiary, exists
+    ):
+        service = BeneficiaryService(AsyncMock())
+        service.find_by = AsyncMock(return_value=beneficiary if exists else None)
+        service.create = AsyncMock(return_value=beneficiary)
+
+        result = await service.resolve(user, "  Electric Company  ")
+
+        assert result is beneficiary
+        service.find_by.assert_awaited_once_with(
+            user_id=user.id, name_code="electric_company", without_throw=True
+        )
+        if exists:
+            service.create.assert_not_awaited()
+        else:
+            service.create.assert_awaited_once_with(
+                user=user, payload=BeneficiaryCreateSchema(name="Electric Company")
+            )
+
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed_method", ["find_by", "create"])
+    async def test_resolve_propagates_dependency_errors(user, failed_method):
+        service = BeneficiaryService(AsyncMock())
+        service.find_by = AsyncMock(return_value=None)
+        service.create = AsyncMock()
+        exception = HTTPException(503, "Service unavailable")
+        getattr(service, failed_method).side_effect = exception
+
+        with pytest.raises(HTTPException) as caught:
+            await service.resolve(user, "Electric Company")
+
+        assert caught.value is exception
+        if failed_method == "find_by":
+            service.create.assert_not_awaited()
 
 
 class TestBeneficiaryServiceList:
@@ -68,7 +122,9 @@ class TestBeneficiaryServiceCreate:
         repository.find_by.return_value = beneficiary
 
         with pytest.raises(HTTPException) as exc:
-            await BeneficiaryService(repository).create(user, create_beneficiary_payload)
+            await BeneficiaryService(repository).create(
+                user, create_beneficiary_payload
+            )
 
         assert exc.value.status_code == HTTPStatus.CONFLICT
         assert exc.value.detail == "Beneficiary already exists"
@@ -136,13 +192,17 @@ class TestBeneficiaryServiceUpdate:
         service.find_by = AsyncMock(side_effect=[beneficiary, beneficiary])
         service._invalidate_cache = AsyncMock()
 
-        result = await service.update(str(beneficiary.id), update_beneficiary_payload, user)
+        result = await service.update(
+            str(beneficiary.id), update_beneficiary_payload, user
+        )
 
         assert isinstance(result, Message)
         assert beneficiary.name == "Water Company"
         assert beneficiary.name_code == "water_company"
         repository.update.assert_awaited_once_with(entity=beneficiary)
-        service._invalidate_cache.assert_awaited_once_with(identifier=str(beneficiary.id))
+        service._invalidate_cache.assert_awaited_once_with(
+            identifier=str(beneficiary.id)
+        )
 
     @staticmethod
     @pytest.mark.asyncio
@@ -191,7 +251,9 @@ class TestBeneficiaryServiceDelete:
             id=str(beneficiary.id), name_code=None, user_id=user.id
         )
         repository.delete.assert_awaited_once_with(entity=beneficiary)
-        service._invalidate_cache.assert_awaited_once_with(identifier=str(beneficiary.id))
+        service._invalidate_cache.assert_awaited_once_with(
+            identifier=str(beneficiary.id)
+        )
 
     @staticmethod
     @pytest.mark.asyncio
@@ -242,7 +304,9 @@ class TestBeneficiaryServiceCache:
             side_effect=RuntimeError("cache unavailable")
         )
 
-        result = await service.update(str(beneficiary.id), update_beneficiary_payload, user)
+        result = await service.update(
+            str(beneficiary.id), update_beneficiary_payload, user
+        )
 
         assert isinstance(result, Message)
         repository.update.assert_awaited_once_with(entity=beneficiary)

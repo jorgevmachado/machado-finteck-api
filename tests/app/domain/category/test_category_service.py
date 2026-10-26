@@ -137,6 +137,72 @@ class TestCategoryServiceFind:
         success_log.assert_not_called()
 
 
+class TestCategoryServiceFindSubcategory:
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_returns_owner_scoped_subcategory(
+        repository, user, subcategory_entity, success_log
+    ):
+        repository.find_subcategory_by_id.return_value = subcategory_entity
+
+        result = await CategoryService(repository).find_subcategory_by_id(
+            subcategory_id=subcategory_entity.id,
+            user_id=user.id,
+            user_request=user.username,
+        )
+
+        assert result is subcategory_entity
+        repository.find_subcategory_by_id.assert_awaited_once_with(
+            subcategory_id=subcategory_entity.id, user_id=user.id
+        )
+        assert success_log.call_args.kwargs["operation"] == "find_subcategory_by_id"
+        assert success_log.call_args.kwargs["user_request"] == user.username
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_missing_or_inaccessible_subcategory_returns_404(
+        repository, user, success_log
+    ):
+        repository.find_subcategory_by_id.return_value = None
+        subcategory_id = uuid4()
+
+        with pytest.raises(HTTPException) as caught:
+            await CategoryService(repository).find_subcategory_by_id(
+                subcategory_id=subcategory_id, user_id=user.id
+            )
+
+        assert caught.value.status_code == HTTPStatus.NOT_FOUND
+        assert caught.value.detail == "Subcategory not found"
+        repository.find_subcategory_by_id.assert_awaited_once_with(
+            subcategory_id=subcategory_id, user_id=user.id
+        )
+        success_log.assert_not_called()
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_repository_failure_is_handled(repository, user, success_log):
+        exception = RuntimeError("database failure")
+        repository.find_subcategory_by_id.side_effect = exception
+
+        with (
+            patch(
+                "app.domain.category.service.handle_service_exception",
+                wraps=handle_service_exception,
+            ) as error,
+            pytest.raises(HTTPException) as caught,
+        ):
+            await CategoryService(repository).find_subcategory_by_id(
+                subcategory_id=uuid4(), user_id=user.id, user_request=user.username
+            )
+
+        assert caught.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+        error.assert_called_once()
+        assert error.call_args.args[0] is exception
+        assert error.call_args.kwargs["operation"] == "find_subcategory_by_id"
+        assert error.call_args.kwargs["user_request"] == user.username
+        success_log.assert_not_called()
+
+
 class TestCategoryServiceCreate:
     @staticmethod
     @pytest.mark.asyncio

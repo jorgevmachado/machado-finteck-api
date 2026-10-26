@@ -1,13 +1,75 @@
 from http import HTTPStatus
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from fastapi import HTTPException
 import pytest
 
-from app.domain.payer.schema import PayerUpdateSchema
+from app.core.exceptions import handle_service_exception
+from app.domain.payer.repository import PayerRepository
+from app.domain.payer.schema import PayerCreateSchema, PayerUpdateSchema
 from app.domain.payer.service import PayerService
 from app.shared.schemas import FilterPage, Message
+
+
+class TestPayerServiceResolve:
+    @staticmethod
+    def test_from_session_binds_repository():
+        session = AsyncMock()
+        service = PayerService.from_session(session)
+
+        assert isinstance(service.repository, PayerRepository)
+        assert service.repository.session is session
+
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exists", [False, True])
+    async def test_resolve_normalizes_lookup_and_creates_only_when_missing(
+        user, payer, exists
+    ):
+        service = PayerService(AsyncMock())
+        service.find_by = AsyncMock(return_value=payer if exists else None)
+        service.create = AsyncMock(return_value=payer)
+
+        result = await service.resolve(user, "  Electric Company  ")
+
+        assert result is payer
+        service.find_by.assert_awaited_once_with(
+            user_id=user.id, name_code="electric_company", without_throw=True
+        )
+        if exists:
+            service.create.assert_not_awaited()
+        else:
+            service.create.assert_awaited_once_with(
+                user=user, payload=PayerCreateSchema(name="Electric Company")
+            )
+
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed_method", ["find_by", "create"])
+    async def test_resolve_handles_lookup_and_creation_failures(user, failed_method):
+        service = PayerService(AsyncMock())
+        service.find_by = AsyncMock(return_value=None)
+        service.create = AsyncMock()
+        exception = RuntimeError("database failure")
+        getattr(service, failed_method).side_effect = exception
+
+        with (
+            patch(
+                "app.domain.payer.service.handle_service_exception",
+                wraps=handle_service_exception,
+            ) as error,
+            pytest.raises(HTTPException) as caught,
+        ):
+            await service.resolve(user, "Electric Company")
+
+        assert caught.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+        error.assert_called_once()
+        assert error.call_args.args[0] is exception
+        assert error.call_args.kwargs["operation"] == "resolve"
+        assert error.call_args.kwargs["user_request"] == user.username
+        if failed_method == "find_by":
+            service.create.assert_not_awaited()
 
 
 class TestPayerServiceList:
@@ -82,9 +144,7 @@ class TestPayerServiceFind:
         repository = AsyncMock()
         repository.find_by.return_value = payer
 
-        result = await PayerService(repository).find_by(
-            id=payer.id, user_id=user.id
-        )
+        result = await PayerService(repository).find_by(id=payer.id, user_id=user.id)
 
         assert result is payer
         repository.find_by.assert_awaited_once_with(

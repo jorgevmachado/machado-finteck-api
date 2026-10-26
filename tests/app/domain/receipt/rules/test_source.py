@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.domain.receipt.rules.configuration.engine import (
     SourceExecutionRequest,
-    _extract,
+    extract_source_value,
     extract_source,
 )
 from app.domain.receipt.rules.configuration import engine
@@ -65,7 +65,7 @@ def source_rule(code):
     ],
 )
 def test_source_matches_original_methods(code, text, identified, expected, status):
-    result = _extract(
+    result = extract_source_value(
         SourceExecutionRequest(rule=source_rule(code), text=text, identified=identified)
     )
     assert result.value == expected
@@ -94,14 +94,14 @@ def test_names_conditions_and_mappings_are_data_not_bank_branches():
         ("Origem: Terceiro\n", False, "Terceiro"),
     ):
         assert (
-            _extract(
+            extract_source_value(
                 SourceExecutionRequest(rule=rule, text=text, identified=identified)
             ).value
             == expected
         )
     rule.is_active = False
     assert (
-        _extract(
+        extract_source_value(
             SourceExecutionRequest(rule=rule, text="nova marca", identified=True)
         ).status
         == "not_found"
@@ -237,7 +237,7 @@ def test_source_engine_handles_legacy_regex_constant_not_found_and_missing_captu
         rule = ReceiptFieldRuleCreateSchema(
             field_name="source_institution", configuration=configuration
         )
-        result = _extract(
+        result = extract_source_value(
             SourceExecutionRequest(rule=rule, text=text, identified=False)
         )
         assert result.status == status and result.value == value
@@ -249,7 +249,9 @@ async def test_wrong_field_is_rejected_before_starting_worker():
         field_name="payer", configuration={"strategy": "not_found"}
     )
     with pytest.raises(ValueError, match="source_institution"):
-        _extract(SourceExecutionRequest(rule=rule, text="", identified=False))
+        extract_source_value(
+            SourceExecutionRequest(rule=rule, text="", identified=False)
+        )
     with patch.object(engine.asyncio, "create_subprocess_exec", AsyncMock()) as start:
         with pytest.raises(ValueError, match="source_institution"):
             await extract_source(rule, "", identified=False)

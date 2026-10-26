@@ -5,9 +5,63 @@ from uuid import uuid4
 from fastapi import HTTPException
 import pytest
 
-from app.domain.institution.schema import InstitutionUpdateSchema
+from app.domain.institution.repository import InstitutionRepository
+from app.domain.institution.schema import (
+    InstitutionCreateSchema,
+    InstitutionUpdateSchema,
+)
 from app.domain.institution.service import InstitutionService
 from app.shared.schemas import FilterPage, Message
+
+
+class TestInstitutionServiceResolve:
+    @staticmethod
+    def test_from_session_binds_repository():
+        session = AsyncMock()
+        service = InstitutionService.from_session(session)
+
+        assert isinstance(service.repository, InstitutionRepository)
+        assert service.repository.session is session
+
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exists", [False, True])
+    async def test_resolve_normalizes_lookup_and_creates_only_when_missing(
+        user, institution, exists
+    ):
+        service = InstitutionService(AsyncMock())
+        service.find_by = AsyncMock(return_value=institution if exists else None)
+        service.create = AsyncMock(return_value=institution)
+
+        result = await service.resolve(user, "  Electric Company  ")
+
+        assert result is institution
+        service.find_by.assert_awaited_once_with(
+            user_id=user.id, name_code="electric_company", without_throw=True
+        )
+        if exists:
+            service.create.assert_not_awaited()
+        else:
+            service.create.assert_awaited_once_with(
+                user=user, payload=InstitutionCreateSchema(name="Electric Company")
+            )
+
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed_method", ["find_by", "create"])
+    async def test_resolve_propagates_lookup_and_creation_failures(user, failed_method):
+        service = InstitutionService(AsyncMock())
+        service.find_by = AsyncMock(return_value=None)
+        service.create = AsyncMock()
+        exception = HTTPException(HTTPStatus.SERVICE_UNAVAILABLE, "Service unavailable")
+        getattr(service, failed_method).side_effect = exception
+
+        with pytest.raises(HTTPException) as caught:
+            await service.resolve(user, "Electric Company")
+
+        assert caught.value is exception
+        if failed_method == "find_by":
+            service.create.assert_not_awaited()
 
 
 class TestInstitutionServiceList:
@@ -68,7 +122,9 @@ class TestInstitutionServiceCreate:
         repository.find_by.return_value = institution
 
         with pytest.raises(HTTPException) as exc:
-            await InstitutionService(repository).create(user, create_institution_payload)
+            await InstitutionService(repository).create(
+                user, create_institution_payload
+            )
 
         assert exc.value.status_code == HTTPStatus.CONFLICT
         assert exc.value.detail == "Institution already exists"
@@ -136,13 +192,17 @@ class TestInstitutionServiceUpdate:
         service.find_by = AsyncMock(side_effect=[institution, institution])
         service._invalidate_cache = AsyncMock()
 
-        result = await service.update(str(institution.id), update_institution_payload, user)
+        result = await service.update(
+            str(institution.id), update_institution_payload, user
+        )
 
         assert isinstance(result, Message)
         assert institution.name == "Water Company"
         assert institution.name_code == "water_company"
         repository.update.assert_awaited_once_with(entity=institution)
-        service._invalidate_cache.assert_awaited_once_with(identifier=str(institution.id))
+        service._invalidate_cache.assert_awaited_once_with(
+            identifier=str(institution.id)
+        )
 
     @staticmethod
     @pytest.mark.asyncio
@@ -191,7 +251,9 @@ class TestInstitutionServiceDelete:
             id=str(institution.id), name_code=None, user_id=user.id
         )
         repository.delete.assert_awaited_once_with(entity=institution)
-        service._invalidate_cache.assert_awaited_once_with(identifier=str(institution.id))
+        service._invalidate_cache.assert_awaited_once_with(
+            identifier=str(institution.id)
+        )
 
     @staticmethod
     @pytest.mark.asyncio
@@ -242,7 +304,9 @@ class TestInstitutionServiceCache:
             side_effect=RuntimeError("cache unavailable")
         )
 
-        result = await service.update(str(institution.id), update_institution_payload, user)
+        result = await service.update(
+            str(institution.id), update_institution_payload, user
+        )
 
         assert isinstance(result, Message)
         repository.update.assert_awaited_once_with(entity=institution)
