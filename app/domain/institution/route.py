@@ -1,5 +1,6 @@
 from http import HTTPStatus
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.pagination import CustomLimitOffsetPage
 from app.core.security import get_current_user
-from app.domain.institution.schema import InstitutionCreateSchema, InstitutionSchema, InstitutionUpdateSchema
+from app.domain.institution.schema import (
+    InstitutionCreateSchema,
+    InstitutionSchema,
+    InstitutionUpdateSchema,
+)
 from app.domain.institution.service import InstitutionService
 from app.models import User
 from app.shared.schemas import FilterPage, Message
@@ -63,25 +68,28 @@ async def list_all(
     return await service.list_all(page_filter=page_filter, user=current_user)
 
 
-@router.get("/{institution_id}", response_model=InstitutionSchema, status_code=HTTPStatus.OK)
-async def find_one(institution_id: str, service: Service, current_user: CurrentUser):
+@router.get(
+    "/{institution_id}", response_model=InstitutionSchema, status_code=HTTPStatus.OK
+)
+async def find_one(institution_id: UUID, service: Service, current_user: CurrentUser):
     return await service.find_by(
-        id=institution_id,
-        user_request=current_user.username,
-        user_id=current_user.id,
+        filters={"id": institution_id},
+        user=current_user,
     )
 
 
 @router.put("/{institution_id}", response_model=Message, status_code=HTTPStatus.OK)
 async def update(
     service: Service,
-    institution_id: str,
+    institution_id: UUID,
     current_user: CurrentUser,
     payload: InstitutionUpdateSchema,
 ):
-    return await service.update(institution_id=institution_id, payload=payload, user=current_user)
+    return await service.update(
+        identifier=institution_id, payload=payload, user=current_user
+    )
 
 
 @router.delete("/{institution_id}", response_model=Message, status_code=HTTPStatus.OK)
-async def delete(service: Service, institution_id: str, current_user: CurrentUser):
-    return await service.delete(user=current_user, institution_id=institution_id)
+async def delete(service: Service, institution_id: UUID, current_user: CurrentUser):
+    return await service.delete(user=current_user, identifier=institution_id)

@@ -82,16 +82,15 @@ async def test_category_routes_delegate_with_authenticated_owner(
     service.create.assert_awaited_once_with(user=user, payload=payload)
     service.list_all.assert_awaited_once_with(page_filter=page_filter, user=user)
     service.find_by.assert_awaited_once_with(
-        id=category_id,
-        user_id=user.id,
-        user_request=user.username,
+        filters={"id": category_id},
+        user=user,
     )
     service.update.assert_awaited_once_with(
-        category_id=category_id,
+        identifier=category_id,
         payload=update_payload,
         user=user,
     )
-    service.delete.assert_awaited_once_with(user=user, category_id=category_id)
+    service.delete.assert_awaited_once_with(user=user, identifier=category_id)
     service.seed_defaults.assert_awaited_once_with(user=user)
 
 
@@ -265,9 +264,8 @@ class TestCategoryHTTPRoutes:
         assert "user_id" not in response.json()
         assert invalid.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
         service.find_by.assert_awaited_once_with(
-            id=category_entity.id,
-            user_id=user.id,
-            user_request=user.username,
+            filters={"id": category_entity.id},
+            user=user,
         )
 
     @staticmethod

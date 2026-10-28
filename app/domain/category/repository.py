@@ -1,84 +1,63 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 import logging
-from typing import Annotated, Any
+from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, Query
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload, selectinload
 
-from app.core.database import get_session
 from app.core.pagination import CustomLimitOffsetPage, is_paginate
 from app.core.pagination.pagination import get_limit_offset_params
-from app.core.repository.base import BaseRepository
 from app.domain.category.business import SubcategoryReconciliationPlan
 from app.models import Category, Subcategory, utcnow
 from app.shared.schemas import FilterPage
+from app.temp import BaseRepository
 
-Session = Annotated[AsyncSession, Depends(get_session)]
-_TRANSACTION_KEY = "app.domain.category.repository.transaction_active"
 logger = logging.getLogger(__name__)
+
+_ACTIVE_SUBCATEGORIES = selectinload(
+    Category.subcategories.and_(Subcategory.deleted_at.is_(None))
+).lazyload(Subcategory.payments)
 
 
 class CategoryRepository(BaseRepository[Category]):
     model = Category
     default_order_by = "created_at"
-
-    @asynccontextmanager
-    async def transaction(self) -> AsyncIterator[None]:
-        session_info = self.session.info
-        if session_info.get(_TRANSACTION_KEY):
-            raise RuntimeError(
-                "Nested category repository transactions are not supported"
-            )
-        if self.session.in_nested_transaction():
-            raise RuntimeError(
-                "Nested category repository transactions are not supported"
-            )
-
-        session_info[_TRANSACTION_KEY] = True
-        try:
-            if not self.session.in_transaction():
-                await self.session.begin()
-            yield
-            await self.session.commit()
-        except BaseException:
-            try:
-                await self.session.rollback()
-            except BaseException:
-                logger.exception("Failed to roll back category aggregate transaction")
-            raise
-        finally:
-            session_info.pop(_TRANSACTION_KEY, None)
+    order_fields = ("created_at", "name")
+    filter_fields = ("id", "name")
+    relations = (_ACTIVE_SUBCATEGORIES,)
 
     async def find_by(
         self,
         *,
-        id: UUID,
         user_id: UUID,
+        filters: Mapping[str, object] | None = None,
+        id: UUID | None = None,
         for_update: bool = False,
     ) -> Category | None:
-        filters = (
-            Category.id == id,
+        if id is not None:
+            filters = {"id": id}
+        elif filters is None:
+            raise ValueError("find_by requires id or filters")
+        if set(filters) - {"id"}:
+            raise ValueError("Category lookups support only the id criterion")
+        raw_id = filters["id"]
+        identifier = raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id))
+        conditions = (
+            Category.id == identifier,
             Category.user_id == user_id,
             Category.deleted_at.is_(None),
         )
-        child_loader = selectinload(
-            Category.subcategories.and_(Subcategory.deleted_at.is_(None))
-        ).lazyload(Subcategory.payments)
-
         if not for_update:
             return await self.session.scalar(
-                select(Category).where(*filters).options(child_loader)
+                select(Category).where(*conditions).options(_ACTIVE_SUBCATEGORIES)
             )
 
         locked_root = await self.session.scalar(
             select(Category)
-            .where(*filters)
+            .where(*conditions)
             .options(lazyload(Category.subcategories))
             .with_for_update(of=Category)
         )
@@ -87,8 +66,8 @@ class CategoryRepository(BaseRepository[Category]):
 
         return await self.session.scalar(
             select(Category)
-            .where(*filters)
-            .options(child_loader)
+            .where(*conditions)
+            .options(_ACTIVE_SUBCATEGORIES)
             .execution_options(populate_existing=True)
         )
 
@@ -123,13 +102,14 @@ class CategoryRepository(BaseRepository[Category]):
         return await self.session.scalar(query)
 
     async def list_all(
-        self, page_filter: Annotated[FilterPage, Query()] = None
+        self, *, user_id: UUID | None, page_filter: FilterPage | None = None
     ) -> list[Category] | CustomLimitOffsetPage[Category]:
-        if page_filter is None or getattr(page_filter, "user_id", None) is None:
-            raise ValueError("Category listings require an owner user_id filter")
+        if user_id is None:
+            raise ValueError("A trusted owner UUID is required")
+        self.require_owner(user_id)
 
         conditions: list[Any] = [
-            Category.user_id == page_filter.user_id,
+            Category.user_id == user_id,
             Category.deleted_at.is_(None),
         ]
         name = getattr(page_filter, "name", None)
@@ -139,38 +119,38 @@ class CategoryRepository(BaseRepository[Category]):
         query = (
             select(Category)
             .where(*conditions)
-            .options(
-                selectinload(
-                    Category.subcategories.and_(Subcategory.deleted_at.is_(None))
-                ).lazyload(Subcategory.payments)
-            )
+            .options(_ACTIVE_SUBCATEGORIES)
             .order_by(Category.created_at, Category.id)
         )
-        if not is_paginate(page_filter):
-            result = await self.session.scalars(query)
-            return result.all()
-
-        params = get_limit_offset_params(page_filter)
-        total = int(
-            await self.session.scalar(
-                select(func.count(Category.id)).where(*conditions)
+        if page_filter is not None and is_paginate(page_filter):
+            params = get_limit_offset_params(page_filter)
+            total = int(
+                await self.session.scalar(
+                    select(func.count(Category.id)).where(*conditions)
+                )
+                or 0
             )
-            or 0
-        )
-        result = await self.session.scalars(
-            query.limit(params.limit).offset(params.offset)
-        )
-        return CustomLimitOffsetPage.create(
-            items=result.all(),
-            total=total,
-            params=params,
-        )
+            result = await self.session.scalars(
+                query.limit(params.limit).offset(params.offset)
+            )
+            return CustomLimitOffsetPage.create(
+                items=list(result.all()),
+                total=total,
+                params=params,
+            )
+
+        result = await self.session.scalars(query)
+        return list(result.all())
 
     async def save(
         self,
         entity: Category,
+        *,
+        user_id: UUID | None = None,
         reconciliation: SubcategoryReconciliationPlan | None = None,
     ) -> Category:
+        if user_id is not None:
+            self._check_entity(entity, user_id)
         self._require_transaction()
         now = utcnow()
         if reconciliation is not None:
@@ -206,16 +186,20 @@ class CategoryRepository(BaseRepository[Category]):
                 )
 
         state = self._state(entity)
-        if state.persistent:
+        if state is not None and state.persistent:
             entity.updated_at = now
         self.session.add(entity)
         await self.session.flush()
         return entity
 
-    async def update(self, entity: Category) -> Category:
-        return await self.save(entity)
+    async def update(
+        self, entity: Category, *, user_id: UUID | None = None
+    ) -> Category:
+        return await self.save(entity, user_id=user_id)
 
-    async def delete(self, entity: Category) -> None:
+    async def delete(self, entity: Category, *, user_id: UUID | None = None) -> None:
+        if user_id is not None:
+            self._check_entity(entity, user_id)
         self._require_transaction()
         now = utcnow()
         entity.deleted_at = now
@@ -229,11 +213,8 @@ class CategoryRepository(BaseRepository[Category]):
             child.updated_at = now
         await self.session.flush()
 
-    def _require_transaction(self) -> None:
-        if not self.session.info.get(_TRANSACTION_KEY):
-            raise RuntimeError(
-                "CategoryRepository save/delete must run inside transaction()"
-            )
+    def _visibility(self) -> tuple[Any, ...]:
+        return (Category.deleted_at.is_(None),)
 
     @staticmethod
     def _state(entity: Category):

@@ -29,6 +29,12 @@ def repository_session(*, active_transaction: bool = False):
     )
 
 
+def owned_transaction_session():
+    session = repository_session()
+    session.info["app.temp.transaction_active"] = True
+    return session
+
+
 class TestCategoryRepositoryTransaction:
     @staticmethod
     @pytest.mark.asyncio
@@ -126,7 +132,7 @@ class TestCategoryRepositoryTransaction:
             async with CategoryRepository(session).transaction():
                 pass
 
-        assert "Failed to roll back category aggregate transaction" in caplog.text
+        assert "Failed to roll back experimental transaction" in caplog.text
         assert "connection lost" in caplog.text
         assert session.info == {}
 
@@ -260,9 +266,10 @@ class TestCategoryRepositoryQueries:
         session.scalars.return_value = SimpleNamespace(all=Mock(return_value=[]))
         session.scalar.return_value = 0
         repository = CategoryRepository(session)
-        page_filter = FilterPage.build(user_id=uuid4(), name="Casa", page=1, limit=5)
+        owner_id = uuid4()
+        page_filter = FilterPage.build(name="Casa", page=1, limit=5)
 
-        result = await repository.list_all(page_filter)
+        result = await repository.list_all(user_id=owner_id, page_filter=page_filter)
 
         assert isinstance(result, CustomLimitOffsetPage)
         assert result.meta.total == 0
@@ -284,9 +291,9 @@ class TestCategoryRepositoryQueries:
         expected = [object()]
         session.scalars.return_value = SimpleNamespace(all=Mock(return_value=expected))
         repository = CategoryRepository(session)
-        page_filter = FilterPage.build(user_id=uuid4(), limit=12)
+        page_filter = FilterPage.build(limit=12)
 
-        result = await repository.list_all(page_filter)
+        result = await repository.list_all(user_id=uuid4(), page_filter=page_filter)
 
         assert result == expected
         session.scalar.assert_not_awaited()
@@ -297,8 +304,56 @@ class TestCategoryRepositoryQueries:
     async def test_listing_without_owner_fails_closed(page_filter):
         repository = CategoryRepository(repository_session())
 
-        with pytest.raises(ValueError, match="owner user_id"):
-            await repository.list_all(page_filter)
+        with pytest.raises(ValueError, match="trusted owner"):
+            await repository.list_all(user_id=None, page_filter=page_filter)
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_find_by_rejects_missing_id():
+        repository = CategoryRepository(repository_session())
+        with pytest.raises(ValueError, match="find_by requires id or filters"):
+            await repository.find_by(user_id=uuid4())
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_find_by_rejects_criteria_beyond_id():
+        repository = CategoryRepository(repository_session())
+        with pytest.raises(ValueError, match="only the id criterion"):
+            await repository.find_by(
+                user_id=uuid4(), filters={"id": uuid4(), "name": "Casa"}
+            )
+
+
+class TestCategoryRepositoryOwnedWrites:
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_save_enforces_trusted_owner(category_entity):
+        repository = CategoryRepository(owned_transaction_session())
+        with pytest.raises(ValueError, match="trusted owner"):
+            await repository.save(category_entity, user_id=uuid4())
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_delete_enforces_trusted_owner(category_entity):
+        repository = CategoryRepository(owned_transaction_session())
+        with pytest.raises(ValueError, match="trusted owner"):
+            await repository.delete(category_entity, user_id=uuid4())
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_update_forwards_owner_to_save(category_entity):
+        repository = CategoryRepository(owned_transaction_session())
+        with pytest.raises(ValueError, match="trusted owner"):
+            await repository.update(category_entity, user_id=uuid4())
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_visibility_filters_hides_deleted_roots():
+        repository = CategoryRepository(repository_session())
+        predicates = repository._visibility()
+        assert len(predicates) == 1
+        sql = str(predicates[0].compile(dialect=postgresql.dialect()))
+        assert "deleted_at IS NULL" in sql
 
 
 class TestCategoryRepositoryWrites:

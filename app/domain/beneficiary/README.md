@@ -24,8 +24,8 @@ mas não podem ser duplicados para o mesmo usuário.
 |---|---|
 | `route.py` | Endpoints protegidos em `/beneficiaries` |
 | `schema.py` | Validação dos dados de entrada e saída |
-| `service.py` | Regras de unicidade, ownership, cache, logs e erros |
-| `repository.py` | Persistência e consultas assíncronas com SQLAlchemy |
+| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização e unicidade |
+| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository` |
 | `app/models/beneficiary/beneficiary.py` | Modelo e restrição de unicidade no banco |
 
 ## Endpoints

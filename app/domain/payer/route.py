@@ -1,5 +1,6 @@
 from http import HTTPStatus
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,24 +65,23 @@ async def list_all(
 
 
 @router.get("/{payer_id}", response_model=PayerSchema, status_code=HTTPStatus.OK)
-async def find_one(payer_id: str, service: Service, current_user: CurrentUser):
+async def find_one(payer_id: UUID, service: Service, current_user: CurrentUser):
     return await service.find_by(
-        id=payer_id,
-        user_request=current_user.username,
-        user_id=current_user.id,
+        filters={"id": payer_id},
+        user=current_user,
     )
 
 
 @router.put("/{payer_id}", response_model=Message, status_code=HTTPStatus.OK)
 async def update(
     service: Service,
-    payer_id: str,
+    payer_id: UUID,
     current_user: CurrentUser,
     payload: PayerUpdateSchema,
 ):
-    return await service.update(payer_id=payer_id, payload=payload, user=current_user)
+    return await service.update(identifier=payer_id, payload=payload, user=current_user)
 
 
 @router.delete("/{payer_id}", response_model=Message, status_code=HTTPStatus.OK)
-async def delete(service: Service, payer_id: str, current_user: CurrentUser):
-    return await service.delete(user=current_user, payer_id=payer_id)
+async def delete(service: Service, payer_id: UUID, current_user: CurrentUser):
+    return await service.delete(user=current_user, identifier=payer_id)

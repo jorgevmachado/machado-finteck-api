@@ -101,12 +101,12 @@ async def test_seed_rolls_back_every_example_when_a_later_save_fails(
         original_save = CategoryRepository.save
         call_count = 0
 
-        async def fail_on_second_save(self, entity, reconciliation=None):
+        async def fail_on_second_save(self, entity, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 2:
                 raise RuntimeError("simulated seed failure")
-            return await original_save(self, entity, reconciliation)
+            return await original_save(self, entity, **kwargs)
 
         monkeypatch.setattr(CategoryRepository, "save", fail_on_second_save)
         with pytest.raises(RuntimeError, match="simulated seed failure"):

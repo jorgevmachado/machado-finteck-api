@@ -1,165 +1,175 @@
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from uuid import uuid4
 
-import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx
+import pytest
 
+from app.core.database import get_session
 from app.core.security import get_current_user
 from app.domain.credit_card.route import (
-    credit_card_filter,
-    credit_card_service,
     create,
+    delete,
     find_one,
     list_all,
+    credit_card_filter,
+    credit_card_service,
     router,
     update,
 )
-from app.domain.credit_card.schema import CreditCardUpdateSchema
 from app.domain.credit_card.service import CreditCardService
+from app.models import CreditCardBrandEnum
 from app.shared.schemas import FilterPage, Message
 
-def test_credit_card_builds_service() -> None:
-    service = credit_card_service(AsyncMock())
-    assert isinstance(service, CreditCardService)
+
+def test_credit_card_service_builds_from_session():
+    assert isinstance(credit_card_service(AsyncMock()), CreditCardService)
 
 
-def test_get_credit_card_filter_builds_dynamic_filter():
-    page_filter = credit_card_filter(
-        page=1,
-        name="Credit Card Name",
-        limit=12,
-        clean_cache=True,
-    )
+def test_credit_card_filter_builds_dynamic_filter():
+    page_filter = credit_card_filter(page=1, name="Test Credit Card", limit=12)
 
     assert page_filter.page == 1
-    assert page_filter.name == "Credit Card Name"
+    assert page_filter.name == "Test Credit Card"
     assert page_filter.limit == 12
-    assert page_filter.clean_cache
+
+
+def test_credit_card_filter_passes_brand_and_active_and_drops_legacy_type():
+    page_filter = credit_card_filter(
+        page=1,
+        name="Visa",
+        brand=CreditCardBrandEnum.VISA,
+        is_active=True,
+        limit=5,
+        offset=0,
+    )
+
+    assert page_filter.brand == CreditCardBrandEnum.VISA
+    assert page_filter.is_active is True
+    assert not hasattr(page_filter, "type")
+    assert not hasattr(page_filter, "with_deleted")
+
 
 class TestCreditCardRoutes:
     @staticmethod
-    @pytest.mark.parametrize("status_code", [200, 404, 500])
-    def test_delete_delegates_to_service_and_preserves_response(user, status_code):
-        app = FastAPI()
-        app.include_router(router, prefix="/credit-cards")
-        service = AsyncMock()
-        if status_code == 200:
-            service.delete.return_value = Message(message="Deleted")
-        else:
-            service.delete.side_effect = HTTPException(
-                status_code=status_code, detail="Credit Card deletion failed"
-            )
-        app.dependency_overrides[credit_card_service] = lambda: service
-        app.dependency_overrides[get_current_user] = lambda: user
-
-        with TestClient(app) as client:
-            response = client.delete("/credit-cards/credit-card-id")
-
-        assert response.status_code == status_code
-        service.delete.assert_awaited_once_with(user=user, credit_card_id="credit-card-id")
-        if status_code == 200:
-            assert response.json() == {"message": "Deleted"}
-        else:
-            assert response.json() == {"detail": "Credit Card deletion failed"}
-
-    @staticmethod
-    def test_delete_requires_authentication():
+    def test_create_endpoint_requires_authentication():
         app = FastAPI()
         app.include_router(router, prefix="/credit-cards")
         service = AsyncMock()
         app.dependency_overrides[credit_card_service] = lambda: service
 
         with TestClient(app) as client:
-            response = client.delete("/credit-cards/credit-card-id")
+            response = client.post("/credit-cards", json={"name": "Test Credit Card"})
 
         assert response.status_code in (401, 403)
-        service.delete.assert_not_awaited()
+        service.create.assert_not_awaited()
 
     @staticmethod
-    def test_update_accepts_payload_without_name_and_type(user):
+    @pytest.mark.asyncio
+    async def test_crud_routes_delegate_with_authenticated_user(
+        user, create_credit_card_payload, update_credit_card_payload
+    ):
+        resource_id = uuid4()
+        service = AsyncMock()
+        page_filter = FilterPage.build(name="Test Credit Card")
+
+        await create(service, user, create_credit_card_payload)
+        await list_all(service, user, page_filter)
+        await find_one(resource_id, service, user)
+        await update(service, resource_id, user, update_credit_card_payload)
+        await delete(service, resource_id, user)
+
+        service.create.assert_awaited_once_with(
+            user=user, payload=create_credit_card_payload
+        )
+        service.list_all.assert_awaited_once_with(page_filter=page_filter, user=user)
+        service.find_by.assert_awaited_once_with(filters={"id": resource_id}, user=user)
+        service.update.assert_awaited_once_with(
+            identifier=resource_id,
+            payload=update_credit_card_payload,
+            user=user,
+        )
+        service.delete.assert_awaited_once_with(user=user, identifier=resource_id)
+
+    @staticmethod
+    def test_delete_endpoint_preserves_service_response(user):
         app = FastAPI()
         app.include_router(router, prefix="/credit-cards")
         service = AsyncMock()
-        service.update.return_value = Message(message="Updated")
+        service.delete.return_value = Message(message="Deleted")
         app.dependency_overrides[credit_card_service] = lambda: service
         app.dependency_overrides[get_current_user] = lambda: user
+        credit_card_id = uuid4()
 
         with TestClient(app) as client:
-            response = client.put("/credit-cards/credit-card-id", json={"color": "Blue"})
+            response = client.delete(f"/credit-cards/{credit_card_id}")
+            malformed = client.delete("/credit-cards/not-a-uuid")
 
         assert response.status_code == 200
-        service.update.assert_awaited_once_with(
-            param="credit-card-id",
-            update_schema=CreditCardUpdateSchema(color="Blue"),
-            user=user,
+        assert response.json() == {"message": "Deleted"}
+        assert malformed.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_http_crud_with_real_credit_card_service_and_database(
+    credit_card_session, credit_card_cache, user
+):
+    app = FastAPI()
+    app.include_router(router, prefix="/credit-cards")
+
+    async def session_override():
+        yield credit_card_session
+
+    app.dependency_overrides[get_session] = session_override
+    app.dependency_overrides[get_current_user] = lambda: user
+    payload = {
+        "name": "Test Credit Card",
+        "brand": "VISA",
+        "closing_day": 15,
+        "due_day": 25,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post("/credit-cards", json=payload)
+        assert created.status_code == 201
+        body = created.json()
+        identifier = body["id"]
+        assert body["name"] == "Test Credit Card"
+        assert body["closing_day"] == 15
+        assert (await client.get(f"/credit-cards/{identifier}")).json() == body
+        page = await client.get(
+            "/credit-cards",
+            params={"offset": 0, "limit": 1, "name": "Test Credit Card"},
         )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_find_one_route_scopes_lookup_to_authenticated_user(user):
-        service = AsyncMock()
-        credit_card_id = "credit-card-id"
-
-        await find_one(param=credit_card_id, service=service, current_user=user)
-
-        service.find_by.assert_awaited_once_with(
-            id=credit_card_id,
-            user_request=user.username,
-            user_id=user.id,
+        assert page.status_code == 200
+        assert page.json()["meta"]["total"] == 1
+        assert page.json()["items"] == [body]
+        assert (await client.post("/credit-cards", json=payload)).status_code == 409
+        updated = await client.put(
+            f"/credit-cards/{identifier}", json={"color": "Blue"}
         )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_route_passes_authenticated_user_to_service(user):
-        service = AsyncMock()
-        page_filter = FilterPage.build(name="Daily")
-
-        await list_all(
-            service=service,
-            current_user=user,
-            page_filter=page_filter,
+        assert updated.json() == {
+            "message": f"Update CreditCard {identifier} successfully"
+        }
+        assert (await client.get(f"/credit-cards/{identifier}")).json()[
+            "color"
+        ] == "Blue"
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+            id=uuid4(), username="other"
         )
-
-        service.list_all.assert_awaited_once_with(
-            page_filter=page_filter,
-            user=user,
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_route_passes_authenticated_user_to_service(
-        user, update_credit_card_payload
-    ):
-        service = AsyncMock()
-        credit_card_id = "credit-card-id"
-
-        await update(
-            service=service,
-            credit_card_id=credit_card_id,
-            current_user=user,
-            payload=update_credit_card_payload,
-        )
-
-        service.update.assert_awaited_once_with(
-            param=credit_card_id,
-            update_schema=update_credit_card_payload,
-            user=user,
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_route_passes_authenticated_user_and_payload_to_service(
-        user, create_credit_card_payload
-    ):
-        service = AsyncMock()
-
-        await create(
-            service=service,
-            current_user=user,
-            credit_card_data=create_credit_card_payload,
-        )
-
-        service.create.assert_awaited_once_with(
-            user=user,
-            payload=create_credit_card_payload,
-        )
+        for method in ("get", "put", "delete"):
+            kwargs = {"json": {"color": "No"}} if method == "put" else {}
+            assert (
+                await getattr(client, method)(f"/credit-cards/{identifier}", **kwargs)
+            ).status_code == 404
+        assert (await client.get("/credit-cards")).json() == []
+        app.dependency_overrides[get_current_user] = lambda: user
+        deleted = await client.delete(f"/credit-cards/{identifier}")
+        assert deleted.json() == {
+            "message": f"Delete CreditCard {identifier} successfully"
+        }
+        assert (await client.get(f"/credit-cards/{identifier}")).status_code == 404
+        assert (await client.delete(f"/credit-cards/{identifier}")).status_code == 404

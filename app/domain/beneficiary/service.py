@@ -5,234 +5,76 @@ from http import HTTPStatus
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache.service import CacheService
-from app.core.exceptions import handle_service_exception
-from app.core.logging import LoggingParams, log_service_success
-from app.core.pagination import CustomLimitOffsetPage
+from app.core.logging import LoggingParams
 from app.domain.beneficiary.repository import BeneficiaryRepository
-from app.domain.beneficiary.schema import BeneficiaryCreateSchema, BeneficiarySchema, BeneficiaryUpdateSchema
+from app.domain.beneficiary.schema import (
+    BeneficiaryCreateSchema,
+    BeneficiarySchema,
+    BeneficiaryUpdateSchema,
+)
 from app.models import Beneficiary, User
-from app.shared.schemas import FilterPage, Message
 from app.shared.utils.string import to_snake_case
+from app.temp import BaseService
 
 logger = logging.getLogger(__name__)
 
 
-class BeneficiaryService:
+class BeneficiaryService(
+    BaseService[
+        Beneficiary, BeneficiaryCreateSchema, BeneficiaryUpdateSchema, BeneficiarySchema
+    ]
+):
+    repository_class = BeneficiaryRepository
+
     def __init__(self, repository: BeneficiaryRepository) -> None:
-        self.alias = "Beneficiary"
-        self.repository = repository
-        self.logger_params = LoggingParams(
-            logger=logger, service="BeneficiaryService", operation="beneficiary"
-        )
-        self.cache_service = CacheService(
-            alias=self.alias,
-            prefix="beneficiary",
-            logger_params=self.logger_params,
+        super().__init__(
+            repository,
+            alias="Beneficiary",
+            logger_params=LoggingParams(
+                logger=logger, service="BeneficiaryService", operation="beneficiary"
+            ),
             schema_class=BeneficiarySchema,
+            cache_prefix="beneficiary",
         )
 
-    @classmethod
-    def from_session(cls, session: AsyncSession) -> BeneficiaryService:
-        return cls(BeneficiaryRepository(session))
+    def _build_entity(self, user_id: UUID, data: dict[str, object]) -> Beneficiary:
+        name = data.get("name")
+        name_code = data.get("name_code")
+        if not isinstance(name, str) or not isinstance(name_code, str):
+            raise ValueError(
+                "Beneficiary requires normalized name and name_code strings"
+            )
+        return Beneficiary(user_id=user_id, name=name, name_code=name_code)
 
-    async def list_all(
-        self, page_filter: FilterPage, user: User
-    ) -> list[Beneficiary] | CustomLimitOffsetPage[Beneficiary]:
-        try:
-            result = await self.repository.list_all(
-                page_filter=page_filter.with_updates(user_id=user.id)
+    async def _normalize(
+        self, data: dict[str, object], user: User, entity_id: UUID | None = None
+    ) -> dict[str, object]:
+        if "name" in data:
+            name = data["name"]
+            if not isinstance(name, str):
+                raise ValueError("Beneficiary name must be a string")
+            data["name_code"] = to_snake_case(name)
+            duplicate = await self._find(
+                user_id=user.id,
+                filters={"name_code": data["name_code"]},
+                required=False,
             )
-            log_service_success(
-                self.logger_params,
-                operation="list_all",
-                message="List all successfully",
-                user_request=user.username,
-            )
-            return result
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="list_all",
-                user_request=user.username,
-                raise_exception=True,
-            )
-
-    async def find_by(
-        self,
-        *,
-        user_id: UUID,
-        id: str | UUID | None = None,
-        name_code: str | None = None,
-        user_request: str | None = None,
-        without_throw: bool = False,
-    ) -> Beneficiary | None:
-        try:
-            result = await self.repository.find_by(
-                id=id, name_code=name_code, user_id=user_id
-            )
-            if result is None and not without_throw:
+            if duplicate is not None and (
+                entity_id is None or duplicate.id != entity_id
+            ):
                 raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND, detail="Beneficiary not found"
+                    status_code=HTTPStatus.CONFLICT,
+                    detail="Beneficiary already exists",
                 )
-            log_service_success(
-                self.logger_params,
-                operation="find_by",
-                message=f"Find by {self.alias} successfully",
-                user_request=user_request,
-            )
-            return result
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="find_by",
-                user_request=user_request,
-                raise_exception=True,
-            )
-
-    async def _invalidate_cache(self, identifier: str | None = None) -> None:
-        try:
-            await self.cache_service.delete_with_parent_cache()
-            if identifier:
-                key = self.cache_service.build_key_one(param=identifier)
-                await self.cache_service.cache.delete_cache(key)
-        except Exception:
-            self.logger_params.logger.warning(
-                "Cache invalidation skipped for %s due to an infrastructure error.",
-                self.alias,
-                exc_info=True,
-            )
-
-    async def create(self, user: User, payload: BeneficiaryCreateSchema) -> Beneficiary:
-        try:
-            name_code = to_snake_case(payload.name)
-            entity = await self.find_by(
-                user_id=user.id, name_code=name_code, without_throw=True
-            )
-            if entity:
-                raise HTTPException(
-                    status_code=HTTPStatus.CONFLICT, detail="Beneficiary already exists"
-                )
-
-            result = await self.repository.save(
-                entity=Beneficiary(
-                    user_id=user.id,
-                    name=payload.name,
-                    name_code=name_code,
-                )
-            )
-            await self._invalidate_cache()
-            log_service_success(
-                self.logger_params,
-                operation="create",
-                message=f"Create {self.alias} {payload.name} successfully",
-                user_request=user.username,
-            )
-            return result
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="create",
-                user_request=user.username,
-                raise_exception=True,
-            )
-
-    async def update(
-        self,
-        beneficiary_id: str,
-        payload: BeneficiaryUpdateSchema,
-        user: User,
-    ) -> Message:
-        try:
-            entity = await self.find_by(
-                id=beneficiary_id, user_id=user.id, user_request=user.username
-            )
-            if entity is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND, detail="Beneficiary not found"
-                )
-
-            update_data = payload.model_dump(exclude_unset=True)
-            if "name" in update_data:
-                name_code = to_snake_case(update_data["name"])
-                duplicate = await self.find_by(
-                    user_id=user.id,
-                    name_code=name_code,
-                    without_throw=True,
-                )
-                if duplicate is not None and duplicate.id != entity.id:
-                    raise HTTPException(
-                        status_code=HTTPStatus.CONFLICT,
-                        detail="Beneficiary already exists",
-                    )
-                update_data["name_code"] = name_code
-
-            for key, value in update_data.items():
-                setattr(entity, key, value)
-
-            await self.repository.update(entity=entity)
-            await self._invalidate_cache(identifier=beneficiary_id)
-            log_service_success(
-                self.logger_params,
-                operation="update",
-                message=f"Update {self.alias} {beneficiary_id} successfully",
-                user_request=user.username,
-            )
-            return Message(message=f"Update {self.alias} {beneficiary_id} successfully")
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="update",
-                user_request=user.username,
-                raise_exception=True,
-            )
-
-    async def delete(self, user: User, beneficiary_id: str) -> Message:
-        try:
-            entity = await self.find_by(
-                id=beneficiary_id, user_id=user.id, without_throw=True
-            )
-            if entity is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND, detail="Beneficiary not found"
-                )
-
-            await self.repository.delete(entity=entity)
-            await self._invalidate_cache(identifier=beneficiary_id)
-            log_service_success(
-                self.logger_params,
-                operation="delete",
-                message=f"Delete {self.alias} {beneficiary_id} successfully",
-                user_request=user.username,
-            )
-            return Message(message=f"Delete {self.alias} {beneficiary_id} successfully")
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="delete",
-                user_request=user.username,
-                raise_exception=True,
-            )
+        return data
 
     async def resolve(self, user: User, name: str) -> Beneficiary:
-        name_code = to_snake_case(name)
-        entity = await self.find_by(
-            user_id=user.id, name_code=name_code, without_throw=True
-        )
-        if not entity:
-            return await self.create(
-                user=user, payload=BeneficiaryCreateSchema(name=name)
+        async with self._operation("resolve", user.username):
+            payload = BeneficiaryCreateSchema(name=name)
+            entity = await self._find(
+                user_id=user.id,
+                filters={"name_code": to_snake_case(payload.name)},
+                required=False,
             )
-        return entity
+            return entity if entity is not None else await self._create(user, payload)

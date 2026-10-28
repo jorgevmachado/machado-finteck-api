@@ -1,10 +1,7 @@
-from app.core.repository.base import BaseRepository
 from app.models import Beneficiary
+from app.temp import BaseRepository
 
 
 class BeneficiaryRepository(BaseRepository[Beneficiary]):
     model = Beneficiary
-
-    async def delete(self, entity: Beneficiary) -> None:
-        await self.session.delete(entity)
-        await self.session.commit()
+    filter_fields = ("id", "name", "name_code")

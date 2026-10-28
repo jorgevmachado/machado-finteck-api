@@ -17,14 +17,22 @@ autenticado.
 
 Usuários diferentes podem cadastrar instituições com o mesmo nome.
 
+> [!WARNING]
+> Na prática, `Institution.name_code` tem `unique=True` **global** no modelo
+> (`app/models/institution/institution.py`), além da constraint composta por
+> usuário. Isso impede que dois usuários cadastrem a mesma instituição com o
+> mesmo nome normalizado (resulta em `500` por `IntegrityError`). A regra
+> documentada acima — unicidade por usuário — está pendente de correção via
+> migration que remova a restrição global.
+
 ## Estrutura
 
 | Arquivo | Responsabilidade |
 |---|---|
 | `route.py` | Endpoints protegidos em `/institutions` |
 | `schema.py` | Validação dos dados de entrada e saída |
-| `service.py` | Regras de unicidade, ownership, cache, logs e erros |
-| `repository.py` | Persistência e consultas assíncronas com SQLAlchemy |
+| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização e unicidade |
+| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository` |
 | `app/models/institution/institution.py` | Modelo e restrição de unicidade no banco |
 
 ## Endpoints

@@ -23,8 +23,8 @@ processamento de pagamentos, geração de faturas ou cálculo de limite disponí
 |---|---|
 | `route.py` | Endpoints protegidos em `/credit-cards` e parâmetros de listagem |
 | `schema.py` | Contratos Pydantic de criação, atualização e resposta |
-| `service.py` | Orquestra CRUD, ownership, verificação de nome na criação, cache, logs e erros |
-| `repository.py` | Reutiliza `BaseRepository` e implementa exclusão física |
+| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização e unicidade de nome |
+| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository`; busca de duplicidade por nome |
 | `../../models/credit_card/credit_card.py` | Modelo SQLAlchemy da tabela `credit_cards` |
 | `../../models/credit_card/enums.py` | Bandeiras aceitas por `CreditCardBrandEnum` |
 
@@ -34,7 +34,7 @@ processamento de pagamentos, geração de faturas ou cálculo de limite disponí
 |---|---|---|
 | `POST` | `/credit-cards` | Cria um cartão e retorna seus dados (`201`) |
 | `GET` | `/credit-cards` | Lista cartões, com suporte a paginação |
-| `GET` | `/credit-cards/{param}` | Busca um cartão por identificador |
+| `GET` | `/credit-cards/{credit_card_id}` | Busca um cartão por identificador |
 | `PUT` | `/credit-cards/{credit_card_id}` | Atualiza os campos enviados e retorna `Message` |
 | `DELETE` | `/credit-cards/{credit_card_id}` | Exclui um cartão e retorna `Message` |
 
@@ -47,8 +47,10 @@ processamento de pagamentos, geração de faturas ou cálculo de limite disponí
 ## Dados e regras
 
 Na criação, `name`, `brand`, `closing_day` e `due_day` são obrigatórios.
-`is_active` assume `true` quando omitido. Os campos `limit`, `last_four_digits`,
-`description`, `color` e `icon` são opcionais.
+`is_active` assume `true` quando omitido e não aceita `null` (nem no update).
+Os campos `limit`, `last_four_digits`, `description`, `color` e `icon` são
+opcionais. O filtro de listagem aceita `brand` como enum de bandeira e
+`is_active` como booleano; valores inválidos retornam `422`.
 
 As bandeiras aceitas são `VISA`, `MASTERCARD`, `ELO`, `AMEX`, `HIPERCARD`,
 `DINERS` e `OTHER`.

@@ -1,10 +1,15 @@
 import pytest
 from pydantic import ValidationError
 
-from app.domain.beneficiary.schema import BeneficiaryCreateSchema, BeneficiaryUpdateSchema
+from app.domain.beneficiary.schema import (
+    BeneficiaryCreateSchema,
+    BeneficiaryUpdateSchema,
+)
 
 
-@pytest.mark.parametrize("schema_class", [BeneficiaryCreateSchema, BeneficiaryUpdateSchema])
+@pytest.mark.parametrize(
+    "schema_class", [BeneficiaryCreateSchema, BeneficiaryUpdateSchema]
+)
 @pytest.mark.parametrize("name", ["", "   "])
 def test_name_rejects_empty_values(schema_class, name):
     with pytest.raises(ValidationError):

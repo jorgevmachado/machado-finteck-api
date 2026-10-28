@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Annotated
+from uuid import UUID
 from http import HTTPStatus
 
 from fastapi import APIRouter, Depends
@@ -14,7 +15,7 @@ from app.domain.credit_card.schema import (
     CreditCardUpdateSchema,
 )
 from app.domain.credit_card.service import CreditCardService
-from app.models import User
+from app.models import CreditCardBrandEnum, User
 from app.shared.schemas import FilterPage, Message
 
 router = APIRouter()
@@ -29,15 +30,13 @@ def credit_card_service(session: Session) -> CreditCardService:
 def credit_card_filter(
     page: int | None = None,
     name: str | None = None,
-    brand: str | None = None,
+    brand: CreditCardBrandEnum | None = None,
     limit: int | None = 12,
     offset: int | None = None,
     is_active: bool | None = None,
     clean_cache: bool = False,
-    with_deleted: bool = False,
 ) -> FilterPage:
     return FilterPage.build(
-        type=type,
         page=page,
         name=name,
         limit=limit,
@@ -45,7 +44,6 @@ def credit_card_filter(
         brand=brand,
         is_active=is_active,
         clean_cache=clean_cache,
-        with_deleted=with_deleted,
     )
 
 
@@ -78,12 +76,15 @@ async def list_all(
     )
 
 
-@router.get("/{param}", response_model=CreditCardSchema, status_code=HTTPStatus.OK)
-async def find_one(param: str, service: Service, current_user: CurrentUser):
+@router.get(
+    "/{credit_card_id}",
+    response_model=CreditCardSchema,
+    status_code=HTTPStatus.OK,
+)
+async def find_one(credit_card_id: UUID, service: Service, current_user: CurrentUser):
     return await service.find_by(
-        id=param,
-        user_request=current_user.username,
-        user_id=current_user.id,
+        filters={"id": credit_card_id},
+        user=current_user,
     )
 
 
@@ -94,12 +95,12 @@ async def find_one(param: str, service: Service, current_user: CurrentUser):
 )
 async def update(
     service: Service,
-    credit_card_id: str,
+    credit_card_id: UUID,
     current_user: CurrentUser,
     payload: CreditCardUpdateSchema,
 ):
     return await service.update(
-        param=credit_card_id, update_schema=payload, user=current_user
+        identifier=credit_card_id, payload=payload, user=current_user
     )
 
 
@@ -110,7 +111,7 @@ async def update(
 )
 async def delete(
     service: Service,
-    credit_card_id: str,
+    credit_card_id: UUID,
     current_user: CurrentUser,
 ):
-    return await service.delete(user=current_user, credit_card_id=credit_card_id)
+    return await service.delete(user=current_user, identifier=credit_card_id)

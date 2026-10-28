@@ -1,313 +1,216 @@
-from http import HTTPStatus
-from unittest.mock import AsyncMock, Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from fastapi import HTTPException
 import pytest
+from sqlalchemy import func, select
 
+from app.core.exceptions import handle_service_exception
 from app.domain.beneficiary.repository import BeneficiaryRepository
 from app.domain.beneficiary.schema import (
     BeneficiaryCreateSchema,
+    BeneficiarySchema,
     BeneficiaryUpdateSchema,
 )
 from app.domain.beneficiary.service import BeneficiaryService
+from app.models import Beneficiary
 from app.shared.schemas import FilterPage, Message
+from app.temp import BaseService
+
+pytestmark = pytest.mark.asyncio
 
 
-class TestBeneficiaryServiceResolve:
-    @staticmethod
-    def test_from_session_binds_repository():
-        session = AsyncMock()
-        service = BeneficiaryService.from_session(session)
+async def test_beneficiary_inherits_crud_without_redefining_it(
+    service, beneficiary_session
+):
+    assert isinstance(service.repository, BeneficiaryRepository)
+    assert service.repository.session is beneficiary_session
+    for method in ("list_all", "find_by", "create", "update", "delete"):
+        assert getattr(BeneficiaryService, method) is getattr(BaseService, method)
 
-        assert isinstance(service.repository, BeneficiaryRepository)
-        assert service.repository.session is session
 
-    @staticmethod
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("exists", [False, True])
-    async def test_resolve_normalizes_lookup_and_creates_only_when_missing(
-        user, beneficiary, exists
-    ):
-        service = BeneficiaryService(AsyncMock())
-        service.find_by = AsyncMock(return_value=beneficiary if exists else None)
-        service.create = AsyncMock(return_value=beneficiary)
+async def test_crud_normalizes_names_preserves_partial_update_and_deletes(
+    service, user, create_beneficiary_payload, update_beneficiary_payload
+):
+    beneficiary = await service.create(user, create_beneficiary_payload)
+    identifier = str(beneficiary.id)
+    assert beneficiary.user_id == user.id
+    assert beneficiary.name_code == "electric_company"
+    assert await service.find_by(user=user, filters={"id": identifier}) is beneficiary
+    assert await service.list_all(FilterPage(), user) == [beneficiary]
+    result = await service.update(identifier, update_beneficiary_payload, user)
+    assert isinstance(result, Message)
+    assert result.message == f"Update Beneficiary {identifier} successfully"
+    assert beneficiary.name == "Water Company"
+    assert beneficiary.name_code == "water_company"
+    await service.update(identifier, BeneficiaryUpdateSchema(), user)
+    assert beneficiary.name == "Water Company"
+    result = await service.delete(user, identifier)
+    assert result.message == f"Delete Beneficiary {identifier} successfully"
+    assert await service.list_all(None, user) == []
 
-        result = await service.resolve(user, "  Electric Company  ")
 
-        assert result is beneficiary
-        service.find_by.assert_awaited_once_with(
-            user_id=user.id, name_code="electric_company", without_throw=True
+async def test_normalized_conflicts_and_self_rename(service, user):
+    first = await service.create(user, BeneficiaryCreateSchema(name="Electric Company"))
+    first_id = first.id
+    second = await service.create(user, BeneficiaryCreateSchema(name="Water Company"))
+    second_id = second.id
+    with pytest.raises(HTTPException) as duplicate:
+        await service.create(user, BeneficiaryCreateSchema(name=" electric company "))
+    assert duplicate.value.status_code == 409
+    await service.update(
+        first_id, BeneficiaryUpdateSchema(name="electric company"), user
+    )
+    with pytest.raises(HTTPException) as rename:
+        await service.update(
+            second_id, BeneficiaryUpdateSchema(name="Electric Company"), user
         )
-        if exists:
-            service.create.assert_not_awaited()
-        else:
-            service.create.assert_awaited_once_with(
-                user=user, payload=BeneficiaryCreateSchema(name="Electric Company")
-            )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("failed_method", ["find_by", "create"])
-    async def test_resolve_propagates_dependency_errors(user, failed_method):
-        service = BeneficiaryService(AsyncMock())
-        service.find_by = AsyncMock(return_value=None)
-        service.create = AsyncMock()
-        exception = HTTPException(503, "Service unavailable")
-        getattr(service, failed_method).side_effect = exception
-
-        with pytest.raises(HTTPException) as caught:
-            await service.resolve(user, "Electric Company")
-
-        assert caught.value is exception
-        if failed_method == "find_by":
-            service.create.assert_not_awaited()
+    assert rename.value.status_code == 409
+    assert (
+        await service.find_by(user=user, filters={"id": second_id})
+    ).name == "Water Company"
 
 
-class TestBeneficiaryServiceList:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_all_scopes_results_to_authenticated_user(user):
-        repository = AsyncMock()
-        repository.list_all.return_value = []
+async def test_ownership_applies_to_queries_mutations_and_uniqueness(service, user):
+    other = SimpleNamespace(id=uuid4(), username="other")
+    own = await service.create(user, BeneficiaryCreateSchema(name="Same"))
+    own_id = own.id
+    foreign = await service.create(other, BeneficiaryCreateSchema(name="Same"))
+    foreign_id = foreign.id
+    assert len(await service.list_all(None, user)) == 1
+    for operation in ("find", "update", "delete"):
+        with pytest.raises(HTTPException) as error:
+            if operation == "find":
+                await service.find_by(user=user, filters={"id": foreign_id})
+            elif operation == "update":
+                await service.update(
+                    foreign_id, BeneficiaryUpdateSchema(name="No"), user
+                )
+            else:
+                await service.delete(user, foreign_id)
+        assert error.value.status_code == 404
+    assert (await service.find_by(user=user, filters={"id": own_id})).name == "Same"
+    assert (
+        await service.find_by(user=other, filters={"id": foreign_id})
+    ).name == "Same"
 
-        result = await BeneficiaryService(repository).list_all(FilterPage(), user)
 
-        assert result == []
-        filters = repository.list_all.await_args.kwargs["page_filter"]
-        assert filters.user_id == user.id
+async def test_resolve_reuses_owner_record_or_creates_once(
+    service, user, beneficiary_session
+):
+    with patch("app.temp.service.log_service_success") as success:
+        first = await service.resolve(user, "  Electric Company  ")
+        second = await service.resolve(user, "electric company")
+    assert first.id == second.id
+    assert first.name == "Electric Company"
+    assert (
+        await beneficiary_session.scalar(select(func.count()).select_from(Beneficiary))
+        == 1
+    )
+    assert [call.kwargs["operation"] for call in success.call_args_list] == [
+        "resolve",
+        "resolve",
+    ]
 
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_all_reports_repository_failure(user):
-        repository = AsyncMock()
-        repository.list_all.side_effect = RuntimeError("database failure")
 
-        with pytest.raises(HTTPException) as exc:
-            await BeneficiaryService(repository).list_all(FilterPage(), user)
-
-        assert exc.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-
-
-class TestBeneficiaryServiceCreate:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_normalizes_name_and_assigns_owner(
-        user, beneficiary, create_beneficiary_payload
+@pytest.mark.parametrize("failure", ["find_by", "save", "commit"])
+async def test_resolve_translates_once_and_rolls_back(service, user, failure):
+    target = service.repository.session if failure == "commit" else service.repository
+    with (
+        patch.object(
+            target, failure, new=AsyncMock(side_effect=RuntimeError("database failure"))
+        ),
+        patch(
+            "app.temp.service.handle_service_exception", wraps=handle_service_exception
+        ) as error,
+        patch("app.temp.service.log_service_success") as success,
+        pytest.raises(HTTPException) as caught,
     ):
-        repository = AsyncMock()
-        repository.find_by.return_value = None
-        repository.save.return_value = beneficiary
-        service = BeneficiaryService(repository)
-        service._invalidate_cache = AsyncMock()
+        await service.resolve(user, "New")
+    assert caught.value.status_code == 500
+    error.assert_called_once()
+    assert error.call_args.kwargs["operation"] == "resolve"
+    assert error.call_args.kwargs["user_request"] == user.username
+    success.assert_not_called()
+    assert await service.list_all(None, user) == []
 
-        result = await service.create(user, create_beneficiary_payload)
 
-        assert result is beneficiary
-        repository.find_by.assert_awaited_once_with(
-            id=None, name_code="electric_company", user_id=user.id
-        )
-        entity = repository.save.await_args.kwargs["entity"]
-        assert entity.user_id == user.id
-        assert entity.name == "Electric Company"
-        assert entity.name_code == "electric_company"
-        service._invalidate_cache.assert_awaited_once_with()
+async def test_optional_lookup_and_list_do_not_hide_database_errors(service, user):
+    assert (
+        await service.find_by(user=user, filters={"id": uuid4()}, required=False)
+        is None
+    )
+    for method in ("find_by", "list_all"):
+        with patch.object(
+            service.repository, method, side_effect=RuntimeError("database")
+        ):
+            with pytest.raises(HTTPException) as caught:
+                if method == "find_by":
+                    await service.find_by(
+                        user=user, filters={"id": uuid4()}, required=False
+                    )
+                else:
+                    await service.list_all(None, user)
+        assert caught.value.status_code == 500
 
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_rejects_normalized_duplicate(
-        user, beneficiary, create_beneficiary_payload
+
+async def test_beneficiary_cached_reads_and_post_commit_invalidation(
+    service, user, beneficiary_cache
+):
+    beneficiary = await service.create(user, BeneficiaryCreateSchema(name="Original"))
+    identifier = beneficiary.id
+    filters = FilterPage(clean_cache=True)
+    page = await service.list_all_cached(filters, user)
+    assert isinstance(page[0], BeneficiarySchema)
+    assert filters.clean_cache is True
+    with patch.object(
+        service.repository, "list_all", side_effect=AssertionError("cache miss")
     ):
-        repository = AsyncMock()
-        repository.find_by.return_value = beneficiary
-
-        with pytest.raises(HTTPException) as exc:
-            await BeneficiaryService(repository).create(
-                user, create_beneficiary_payload
-            )
-
-        assert exc.value.status_code == HTTPStatus.CONFLICT
-        assert exc.value.detail == "Beneficiary already exists"
-        repository.save.assert_not_awaited()
+        assert await service.list_all_cached(None, user) == page
+    await service.find_one_cached(user=user, filters={"name_code": "original"})
+    await service.update(identifier, BeneficiaryUpdateSchema(name="Renamed"), user)
+    assert beneficiary_cache._data == {}
+    assert (
+        await service.find_one_cached(user=user, filters={"id": identifier})
+    ).name == "Renamed"
+    await service.delete(user, identifier)
+    assert beneficiary_cache._data == {}
 
 
-class TestBeneficiaryServiceFind:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_find_by_uses_owner_filter(user, beneficiary):
-        repository = AsyncMock()
-        repository.find_by.return_value = beneficiary
-
-        result = await BeneficiaryService(repository).find_by(
-            id=beneficiary.id, user_id=user.id
-        )
-
-        assert result is beneficiary
-        repository.find_by.assert_awaited_once_with(
-            id=beneficiary.id, name_code=None, user_id=user.id
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_find_by_rejects_missing_or_foreign_beneficiary(user):
-        repository = AsyncMock()
-        repository.find_by.return_value = None
-
-        with pytest.raises(HTTPException) as exc:
-            await BeneficiaryService(repository).find_by(id=uuid4(), user_id=user.id)
-
-        assert exc.value.status_code == HTTPStatus.NOT_FOUND
-
-
-class TestBeneficiaryServiceUpdate:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_returns_not_found_when_lookup_returns_none(
-        user, update_beneficiary_payload
+async def test_cache_failure_does_not_undo_committed_update(
+    service, user, beneficiary_cache
+):
+    beneficiary = await service.create(user, BeneficiaryCreateSchema(name="Before"))
+    identifier = beneficiary.id
+    with (
+        patch.object(
+            beneficiary_cache,
+            "scan_iter",
+            side_effect=RuntimeError("cache unavailable"),
+        ),
+        patch.object(service.logger_params.logger, "warning") as warning,
     ):
-        repository = AsyncMock()
-        service = BeneficiaryService(repository)
-        service.find_by = AsyncMock(return_value=None)
-        service._invalidate_cache = AsyncMock()
-        beneficiary_id = str(uuid4())
-
-        with pytest.raises(HTTPException) as exc:
-            await service.update(beneficiary_id, update_beneficiary_payload, user)
-
-        assert exc.value.status_code == HTTPStatus.NOT_FOUND
-        assert exc.value.detail == "Beneficiary not found"
-        service.find_by.assert_awaited_once_with(
-            id=beneficiary_id, user_id=user.id, user_request=user.username
-        )
-        repository.update.assert_not_awaited()
-        service._invalidate_cache.assert_not_awaited()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_changes_name_and_normalized_code(
-        user, beneficiary, update_beneficiary_payload
-    ):
-        repository = AsyncMock()
-        service = BeneficiaryService(repository)
-        service.find_by = AsyncMock(side_effect=[beneficiary, beneficiary])
-        service._invalidate_cache = AsyncMock()
-
         result = await service.update(
-            str(beneficiary.id), update_beneficiary_payload, user
+            identifier, BeneficiaryUpdateSchema(name="After"), user
         )
-
-        assert isinstance(result, Message)
-        assert beneficiary.name == "Water Company"
-        assert beneficiary.name_code == "water_company"
-        repository.update.assert_awaited_once_with(entity=beneficiary)
-        service._invalidate_cache.assert_awaited_once_with(
-            identifier=str(beneficiary.id)
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_rejects_name_owned_by_another_beneficiary(
-        user, beneficiary, update_beneficiary_payload
-    ):
-        duplicate = AsyncMock()
-        duplicate.id = uuid4()
-        service = BeneficiaryService(AsyncMock())
-        service.find_by = AsyncMock(side_effect=[beneficiary, duplicate])
-
-        with pytest.raises(HTTPException) as exc:
-            await service.update(str(beneficiary.id), update_beneficiary_payload, user)
-
-        assert exc.value.status_code == HTTPStatus.CONFLICT
-        service.repository.update.assert_not_awaited()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_empty_update_preserves_entity(user, beneficiary):
-        repository = AsyncMock()
-        service = BeneficiaryService(repository)
-        service.find_by = AsyncMock(return_value=beneficiary)
-        service._invalidate_cache = AsyncMock()
-        original_name = beneficiary.name
-
-        await service.update(str(beneficiary.id), BeneficiaryUpdateSchema(), user)
-
-        assert beneficiary.name == original_name
-        repository.update.assert_awaited_once_with(entity=beneficiary)
+    assert isinstance(result, Message)
+    warning.assert_called_once()
+    assert (
+        await service.find_by(user=user, filters={"id": identifier})
+    ).name == "After"
 
 
-class TestBeneficiaryServiceDelete:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_delete_removes_only_owned_beneficiary(user, beneficiary):
-        repository = AsyncMock()
-        repository.find_by.return_value = beneficiary
-        service = BeneficiaryService(repository)
-        service._invalidate_cache = AsyncMock()
-
-        result = await service.delete(user, str(beneficiary.id))
-
-        assert isinstance(result, Message)
-        repository.find_by.assert_awaited_once_with(
-            id=str(beneficiary.id), name_code=None, user_id=user.id
-        )
-        repository.delete.assert_awaited_once_with(entity=beneficiary)
-        service._invalidate_cache.assert_awaited_once_with(
-            identifier=str(beneficiary.id)
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_delete_rejects_missing_or_foreign_beneficiary(user):
-        repository = AsyncMock()
-        repository.find_by.return_value = None
-
-        with pytest.raises(HTTPException) as exc:
-            await BeneficiaryService(repository).delete(user, str(uuid4()))
-
-        assert exc.value.status_code == HTTPStatus.NOT_FOUND
-        repository.delete.assert_not_awaited()
+async def test_build_entity_rejects_non_string_name(service, user):
+    with pytest.raises(ValueError, match="normalized name and name_code"):
+        service._build_entity(user.id, {"name": 123, "name_code": "x"})
 
 
-class TestBeneficiaryServiceCache:
-    @staticmethod
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("identifier", [None, "beneficiary-id"])
-    async def test_invalidate_cache_clears_domain_and_namespaced_key(identifier):
-        service = BeneficiaryService(AsyncMock())
-        service.cache_service = Mock()
-        service.cache_service.delete_with_parent_cache = AsyncMock()
-        service.cache_service.cache.delete_cache = AsyncMock()
-        service.cache_service.build_key_one.return_value = "beneficiary:beneficiary-id"
+async def test_build_entity_rejects_non_string_name_code(service, user):
+    with pytest.raises(ValueError, match="normalized name and name_code"):
+        service._build_entity(user.id, {"name": "X", "name_code": None})
 
-        await service._invalidate_cache(identifier)
 
-        service.cache_service.delete_with_parent_cache.assert_awaited_once_with()
-        if identifier:
-            service.cache_service.build_key_one.assert_called_once_with(
-                param=identifier
-            )
-            service.cache_service.cache.delete_cache.assert_awaited_once_with(
-                "beneficiary:beneficiary-id"
-            )
-        else:
-            service.cache_service.cache.delete_cache.assert_not_awaited()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_cache_failure_is_logged_without_blocking_database_update(
-        user, beneficiary, update_beneficiary_payload, caplog
-    ):
-        repository = AsyncMock()
-        repository.find_by.return_value = beneficiary
-        service = BeneficiaryService(repository)
-        service.cache_service.delete_with_parent_cache = AsyncMock(
-            side_effect=RuntimeError("cache unavailable")
-        )
-
-        result = await service.update(
-            str(beneficiary.id), update_beneficiary_payload, user
-        )
-
-        assert isinstance(result, Message)
-        repository.update.assert_awaited_once_with(entity=beneficiary)
-        assert "Cache invalidation skipped" in caplog.text
+async def test_normalize_rejects_non_string_name(service, user):
+    with pytest.raises(ValueError, match="name must be a string"):
+        await service._normalize({"name": 123}, user)

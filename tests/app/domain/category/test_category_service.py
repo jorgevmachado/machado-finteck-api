@@ -15,6 +15,7 @@ from app.domain.category.schema import CategoryCreateSchema, CategoryUpdateSchem
 from app.domain.category.service import CategoryService
 from app.models import Category, Subcategory, utcnow
 from app.shared.schemas import FilterPage, Message
+from app.temp.service import BaseService
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def repository(transaction_state):
     repository = AsyncMock(spec=CategoryRepository)
     repository.find_by_name.return_value = None
     repository.find_by.return_value = None
-    repository.save.side_effect = lambda *, entity, **kwargs: entity
+    repository.save.side_effect = lambda entity, **kwargs: entity
 
     @asynccontextmanager
     async def transaction():
@@ -47,7 +48,7 @@ def repository(transaction_state):
 
 @pytest.fixture
 def success_log():
-    with patch("app.domain.category.service.log_service_success") as log:
+    with patch("app.temp.service.log_service_success") as log:
         yield log
 
 
@@ -71,6 +72,12 @@ class TestCategoryService:
         assert isinstance(service.repository, CategoryRepository)
         assert service.repository.session is session
 
+    @staticmethod
+    def test_inherits_base_service_and_shares_crud():
+        assert issubclass(CategoryService, BaseService)
+        for method in ("list_all", "find_by", "create"):
+            assert getattr(CategoryService, method) is getattr(BaseService, method)
+
 
 class TestCategoryServiceList:
     @staticmethod
@@ -80,7 +87,7 @@ class TestCategoryServiceList:
         repository, user, paginated, success_log
     ):
         page_filter = FilterPage.build(
-            user_id=uuid4(), name="Casa", page=1 if paginated else None, limit=12
+            name="Casa", page=1 if paginated else None, limit=12
         )
         expected = SimpleNamespace(items=[], total=0) if paginated else []
         repository.list_all.return_value = expected
@@ -88,12 +95,12 @@ class TestCategoryServiceList:
         result = await CategoryService(repository).list_all(page_filter, user)
 
         assert result is expected
-        filters = repository.list_all.await_args.kwargs["page_filter"]
-        assert filters.user_id == user.id
-        assert filters.name == "Casa"
-        assert filters.page == page_filter.page
-        assert filters.limit == 12
-        assert page_filter.user_id != user.id
+        caller = repository.list_all.await_args.kwargs
+        assert caller["user_id"] == user.id
+        assert caller["page_filter"] is page_filter
+        assert caller["page_filter"].name == "Casa"
+        assert caller["page_filter"].page == page_filter.page
+        assert caller["page_filter"].limit == 12
         repository.transaction.assert_not_called()
         assert success_log.call_args.kwargs["user_request"] == user.username
 
@@ -111,13 +118,13 @@ class TestCategoryServiceFind:
         repository.find_by.return_value = category_entity
 
         result = await CategoryService(repository).find_by(
-            id=category_entity.id, user_id=user.id, user_request=user.username
+            user=user, filters={"id": category_entity.id}
         )
 
         assert result is category_entity
         assert result.subcategories[0].is_active is False
         repository.find_by.assert_awaited_once_with(
-            id=category_entity.id, user_id=user.id
+            user_id=user.id, filters={"id": category_entity.id}
         )
         repository.transaction.assert_not_called()
         assert success_log.call_args.kwargs["operation"] == "find_by"
@@ -130,10 +137,14 @@ class TestCategoryServiceFind:
         category_id = uuid4()
 
         with pytest.raises(HTTPException) as exc:
-            await CategoryService(repository).find_by(id=category_id, user_id=user.id)
+            await CategoryService(repository).find_by(
+                user=user, filters={"id": category_id}
+            )
 
         assert exc.value.status_code == HTTPStatus.NOT_FOUND
-        repository.find_by.assert_awaited_once_with(id=category_id, user_id=user.id)
+        repository.find_by.assert_awaited_once_with(
+            user_id=user.id, filters={"id": category_id}
+        )
         success_log.assert_not_called()
 
 
@@ -186,7 +197,7 @@ class TestCategoryServiceFindSubcategory:
 
         with (
             patch(
-                "app.domain.category.service.handle_service_exception",
+                "app.temp.service.handle_service_exception",
                 wraps=handle_service_exception,
             ) as error,
             pytest.raises(HTTPException) as caught,
@@ -234,9 +245,9 @@ class TestCategoryServiceCreate:
         assert second.is_active is False and second.name == "Lazer"
         assert len({result.id, first.id, second.id}) == 3
         repository.find_by_name.assert_awaited_once_with(
-            name="Casa principal", user_id=user.id
+            name="Casa principal", user_id=user.id, exclude_id=None
         )
-        repository.save.assert_awaited_once_with(entity=result)
+        repository.save.assert_awaited_once_with(result, user_id=user.id)
         repository.transaction.assert_called_once_with()
         assert transaction_state.events == ["begin", "commit", "success"]
 
@@ -250,7 +261,9 @@ class TestCategoryServiceCreate:
             user, CategoryCreateSchema(name=f" {name} ")
         )
 
-        repository.find_by_name.assert_awaited_once_with(name=name, user_id=user.id)
+        repository.find_by_name.assert_awaited_once_with(
+            name=name, user_id=user.id, exclude_id=None
+        )
         assert result.name == name
         assert result.is_active is True
         assert result.subcategories == []
@@ -272,6 +285,30 @@ class TestCategoryServiceCreate:
         repository.save.assert_not_awaited()
         assert transaction_state.events == ["begin", "rollback"]
         success_log.assert_not_called()
+
+
+class TestCategoryServiceNormalize:
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_normalize_skips_duplicate_check_without_name(repository, user):
+        service = CategoryService(repository)
+
+        result = await service._normalize({"icon": "house"}, user)
+
+        assert result == {"icon": "house"}
+        repository.find_by_name.assert_not_awaited()
+
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_normalize_excludes_self_when_renaming(repository, user):
+        service = CategoryService(repository)
+        category_id = uuid4()
+
+        await service._normalize({"name": "Casa"}, user, entity_id=category_id)
+
+        repository.find_by_name.assert_awaited_once_with(
+            name="Casa", user_id=user.id, exclude_id=category_id
+        )
 
 
 class TestCategoryServiceSeed:
@@ -405,7 +442,7 @@ class TestCategoryServiceUpdate:
             child.deleted_at,
         ) == before
         repository.save.assert_awaited_once_with(
-            entity=category_entity, reconciliation=None
+            entity=category_entity, user_id=user.id, reconciliation=None
         )
         assert transaction_state.events == ["begin", "commit"]
 
@@ -446,6 +483,7 @@ class TestCategoryServiceUpdate:
         repository.save.assert_awaited_once()
         arguments = repository.save.await_args.kwargs
         assert arguments["entity"] is category_entity
+        assert arguments["user_id"] == user.id
         plan = arguments["reconciliation"]
         assert plan.remove_ids == (removed.id,)
         assert plan.updates[0].id == retained.id
@@ -598,7 +636,7 @@ class TestCategoryServiceDelete:
         repository.find_by.assert_awaited_once_with(
             id=category_entity.id, user_id=user.id, for_update=True
         )
-        repository.delete.assert_awaited_once_with(entity=category_entity)
+        repository.delete.assert_awaited_once_with(category_entity, user_id=user.id)
         repository.save.assert_not_awaited()
         repository.transaction.assert_called_once_with()
         assert transaction_state.events == ["begin", "commit", "success"]
@@ -661,13 +699,11 @@ class TestCategoryServiceErrors:
         else:
             transaction_state.commit_error = failure
 
-        def handle_after_rollback(exception, **kwargs):
-            assert transaction_state.events[-1] == "rollback"
-            return handle_service_exception(exception, **kwargs)
+        error = handle_service_exception
 
         with patch(
-            "app.domain.category.service.handle_service_exception",
-            side_effect=handle_after_rollback,
+            "app.temp.service.handle_service_exception",
+            wraps=error,
         ) as handler:
             with pytest.raises(HTTPException) as exc:
                 await CategoryService(repository).update(
@@ -725,7 +761,7 @@ class TestCategoryServiceErrors:
             call = service.list_all(FilterPage(), user)
         elif operation == "find_by":
             repository.find_by.side_effect = failure
-            call = service.find_by(id=category_entity.id, user_id=user.id)
+            call = service.find_by(user=user, filters={"id": category_entity.id})
         elif operation == "update":
             repository.save.side_effect = failure
             call = service.update(
@@ -736,7 +772,7 @@ class TestCategoryServiceErrors:
             call = service.delete(user, category_entity.id)
 
         with patch(
-            "app.domain.category.service.handle_service_exception",
+            "app.temp.service.handle_service_exception",
             wraps=handle_service_exception,
         ) as handler:
             with pytest.raises(HTTPException) as exc:

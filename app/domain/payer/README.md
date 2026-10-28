@@ -1,7 +1,7 @@
 # Domain Payer
 
-O domain `beneficiary.py` gerencia favorecidos, recebedores ou entidades às quais o
-usuário realiza pagamentos. Ele fornece um CRUD protegido e mantém nomes
+O domínio `payer` gerencia pagadores vinculados ao usuário autenticado.
+Ele fornece um CRUD protegido e mantém nomes
 normalizados para evitar cadastros duplicados por usuário.
 
 ## Responsabilidades
@@ -19,8 +19,23 @@ normalizados para evitar cadastros duplicados por usuário.
 |---|---|
 | `route.py` | Endpoints protegidos em `/payers` |
 | `schema.py` | Validação dos contratos de entrada e saída |
-| `service.py` | Orquestra CRUD, ownership, unicidade, cache, logs e erros |
-| `repository.py` | Persistência assíncrona com SQLAlchemy |
+| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização, unicidade e `resolve` |
+| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository`; normaliza IDs |
+
+## Piloto das bases
+
+Este é o primeiro domínio integrado às bases de `app/temp`. Listagem, busca,
+criação, atualização e exclusão são herdadas, sem reimplementar seus fluxos.
+`_operation` centraliza erros e logs, seguindo a tática de receipt.
+`resolve` reutiliza os helpers internos para evitar tradução e logs duplicados.
+
+Cada mutação possui uma única transação; a exclusão continua física. A
+normalização e a unicidade por `name_code` permanecem regras locais do payer.
+O cache usa `CacheService` com namespace por proprietário e invalidação herdada
+após commit. `list_all_cached` e `find_one_cached` estão disponíveis, mas os GETs
+continuam consultando o banco como antes; não foi ativado cache de leitura nas
+rotas. As rotas, formatos de resposta e mensagens de atualização/exclusão
+permanecem iguais. A API interna de busca usa `user` e `filters` explícitos.
 
 ## Endpoints
 

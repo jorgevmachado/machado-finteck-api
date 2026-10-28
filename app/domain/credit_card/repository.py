@@ -1,12 +1,20 @@
-from __future__ import annotations
+from uuid import UUID
 
-from app.core.repository.base import BaseRepository
+from sqlalchemy import select
+
 from app.models import CreditCard
+from app.temp import BaseRepository
 
 
 class CreditCardRepository(BaseRepository[CreditCard]):
     model = CreditCard
+    filter_fields = ("id", "name", "brand", "is_active")
 
-    async def delete(self, entity: CreditCard) -> None:
-        await self.session.delete(entity)
-        await self.session.commit()
+    async def find_by_name(self, *, user_id: UUID, name: str) -> CreditCard | None:
+        # `name` não é único no banco; LIMIT 1 evita MultipleResultsFound
+        # quando há duplicados por corrida — qualquer ocorrência já é duplicata.
+        return await self.session.scalar(
+            select(CreditCard)
+            .where(CreditCard.user_id == user_id, CreditCard.name == name)
+            .limit(1)
+        )

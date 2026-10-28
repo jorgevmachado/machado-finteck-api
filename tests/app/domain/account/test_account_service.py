@@ -1,437 +1,229 @@
-from http import HTTPStatus
-from unittest.mock import AsyncMock, Mock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import HTTPException
 import pytest
 
-from app.domain.account.service import AccountService
-from app.domain.account.schema import AccountUpdateSchema
 from app.domain.account.repository import AccountRepository
-from app.domain.account.route import find_one
+from app.domain.account.schema import (
+    AccountCreateSchema,
+    AccountSchema,
+    AccountUpdateSchema,
+)
+from app.domain.account.service import AccountService
+from app.models import Account, AccountTypeEnum
 from app.shared.schemas import FilterPage, Message
+from app.temp import BaseService
+
+pytestmark = pytest.mark.asyncio
 
 
-class TestAccountService:
-    @staticmethod
-    def test_from_session_builds_service():
-        service = AccountService.from_session(AsyncMock())
-
-        assert isinstance(service, AccountService)
-        assert AccountService.__bases__ == (object,)
-
-
-class TestAccountServiceList:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_all_returns_empty_list_when_user_has_no_accounts(user):
-        repository = AsyncMock()
-        repository.list_all.return_value = []
-
-        result = await AccountService(repository).list_all(FilterPage(), user)
-
-        assert result == []
-        filters = repository.list_all.await_args.kwargs["page_filter"]
-        assert filters.user_id == user.id
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_all_does_not_hide_repository_failure(user):
-        repository = AsyncMock()
-        repository.list_all.side_effect = RuntimeError("database failure")
-
-        with pytest.raises(HTTPException) as exc:
-            await AccountService(repository).list_all(FilterPage(), user)
-
-        assert exc.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-        assert exc.value.detail == "Internal server error"
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_all_filters_accounts_by_authenticated_user(user):
-        repository = AsyncMock()
-        service = AccountService(repository)
-        page_filter = FilterPage.build(name="Daily")
-
-        result = await service.list_all(page_filter=page_filter, user=user)
-
-        assert result == repository.list_all.return_value
-        repository.list_all.assert_awaited_once()
-        filters = repository.list_all.await_args.kwargs["page_filter"]
-        assert filters.name == "Daily"
-        assert filters.user_id == user.id
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_list_all_overrides_client_supplied_user_filter(user):
-        repository = AsyncMock()
-        service = AccountService(repository)
-        another_user_id = "not-the-authenticated-user"
-        page_filter = FilterPage.build(user_id=another_user_id)
-
-        await service.list_all(page_filter=page_filter, user=user)
-
-        filters = repository.list_all.await_args.kwargs["page_filter"]
-        assert filters.user_id == user.id
+def _create_payload(name: str, **overrides) -> AccountCreateSchema:
+    return AccountCreateSchema(
+        name=name,
+        type=AccountTypeEnum.CASH,
+        **overrides,
+    )
 
 
-class TestAccountServiceCreate:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_checks_duplicate_name_only_within_authenticated_user(
-        user, account, create_account_payload
+def _account_entity(user_id, name, **overrides):
+    return Account(
+        user_id=user_id,
+        name=name,
+        type=AccountTypeEnum.CASH,
+        icon=None,
+        color=None,
+        agency=None,
+        description=None,
+        account_number=None,
+        financial_institution=None,
+        is_active=True,
+        **overrides,
+    )
+
+
+async def test_account_inherits_crud_without_redefining_it(service, account_session):
+    assert isinstance(service.repository, AccountRepository)
+    assert service.repository.session is account_session
+    for method in ("list_all", "find_by", "create", "update", "delete"):
+        assert getattr(AccountService, method) is getattr(BaseService, method)
+
+
+async def test_crud_preserves_partial_update_and_deletes(
+    service, user, create_account_payload, update_account_payload
+):
+    account = await service.create(user, create_account_payload)
+    identifier = str(account.id)
+    assert account.user_id == user.id
+    assert account.name == "Test Account"
+    assert account.type == AccountTypeEnum.CASH
+    assert await service.find_by(user=user, filters={"id": identifier}) is account
+    assert await service.list_all(FilterPage(), user) == [account]
+    result = await service.update(identifier, update_account_payload, user)
+    assert isinstance(result, Message)
+    assert result.message == f"Update Account {identifier} successfully"
+    assert account.name == "Test Account"
+    await service.update(identifier, AccountUpdateSchema(color="Blue"), user)
+    assert account.color == "Blue"
+    assert account.name == "Test Account"
+    result = await service.delete(user, identifier)
+    assert result.message == f"Delete Account {identifier} successfully"
+    assert await service.list_all(None, user) == []
+
+
+async def test_normalized_conflicts_and_self_rename(service, user):
+    first = await service.create(user, _create_payload("Principal"))
+    first_id = first.id
+    second = await service.create(user, _create_payload("Poupança"))
+    second_id = second.id
+    with pytest.raises(HTTPException) as duplicate:
+        await service.create(user, _create_payload("Principal"))
+    assert duplicate.value.status_code == 409
+    await service.update(first_id, AccountUpdateSchema(name="Principal"), user)
+    with pytest.raises(HTTPException) as rename:
+        await service.update(second_id, AccountUpdateSchema(name="Principal"), user)
+    assert rename.value.status_code == 409
+    assert (
+        await service.find_by(user=user, filters={"id": second_id})
+    ).name == "Poupança"
+
+
+async def test_duplicate_name_rows_yield_409_not_multiple_results(
+    service, user, account_session
+):
+    # Corrida: duas contas com o mesmo nome já persistem (sem constraint única).
+    account_session.add_all(
+        [
+            _account_entity(user.id, "Dup"),
+            _account_entity(user.id, "Dup"),
+        ]
+    )
+    await account_session.commit()
+
+    with pytest.raises(HTTPException) as duplicate:
+        await service.create(user, _create_payload("Dup"))
+    assert duplicate.value.status_code == 409
+
+
+async def test_ownership_applies_to_queries_mutations_and_uniqueness(service, user):
+    other = SimpleNamespace(id=uuid4(), username="other")
+    own = await service.create(user, _create_payload("Same"))
+    own_id = own.id
+    foreign = await service.create(other, _create_payload("Same"))
+    foreign_id = foreign.id
+    assert len(await service.list_all(None, user)) == 1
+    for operation in ("find", "update", "delete"):
+        with pytest.raises(HTTPException) as error:
+            if operation == "find":
+                await service.find_by(user=user, filters={"id": foreign_id})
+            elif operation == "update":
+                await service.update(foreign_id, AccountUpdateSchema(name="No"), user)
+            else:
+                await service.delete(user, foreign_id)
+        assert error.value.status_code == 404
+    assert (await service.find_by(user=user, filters={"id": own_id})).name == "Same"
+    assert (
+        await service.find_by(user=other, filters={"id": foreign_id})
+    ).name == "Same"
+
+
+async def test_optional_lookup_and_list_do_not_hide_database_errors(service, user):
+    assert (
+        await service.find_by(user=user, filters={"id": uuid4()}, required=False)
+        is None
+    )
+    for method in ("find_by", "list_all"):
+        with patch.object(
+            service.repository, method, side_effect=RuntimeError("database")
+        ):
+            with pytest.raises(HTTPException) as caught:
+                if method == "find_by":
+                    await service.find_by(
+                        user=user, filters={"id": uuid4()}, required=False
+                    )
+                else:
+                    await service.list_all(None, user)
+        assert caught.value.status_code == 500
+
+
+async def test_cached_reads_and_post_commit_invalidation(service, user, account_cache):
+    account = await service.create(user, _create_payload("Original"))
+    identifier = account.id
+    filters = FilterPage(clean_cache=True)
+    page = await service.list_all_cached(filters, user)
+    assert isinstance(page[0], AccountSchema)
+    assert filters.clean_cache is True
+    with patch.object(
+        service.repository, "list_all", side_effect=AssertionError("cache miss")
     ):
-        repository = AsyncMock()
-        repository.find_by.return_value = None
-        repository.save.return_value = account
+        assert await service.list_all_cached(None, user) == page
+    await service.find_one_cached(user=user, filters={"name": "Original"})
+    await service.update(identifier, AccountUpdateSchema(name="Renamed"), user)
+    assert account_cache._data == {}
+    assert (
+        await service.find_one_cached(user=user, filters={"id": identifier})
+    ).name == "Renamed"
+    await service.delete(user, identifier)
+    assert account_cache._data == {}
 
-        result = await AccountService(repository).create(user, create_account_payload)
 
-        assert result is account
-        repository.find_by.assert_awaited_once_with(
-            id=None, name=create_account_payload.name, user_id=user.id
-        )
-        repository.save.assert_awaited_once()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_account_with_all_fields(
-        user, account, create_account_payload
+async def test_cache_failure_does_not_undo_committed_update(
+    service, user, account_cache
+):
+    account = await service.create(user, _create_payload("Before"))
+    identifier = account.id
+    with (
+        patch.object(
+            account_cache,
+            "scan_iter",
+            side_effect=RuntimeError("cache unavailable"),
+        ),
+        patch.object(service.logger_params.logger, "warning") as warning,
     ):
-        repository = AsyncMock()
-        service = AccountService(repository)
-
-        service.find_by = AsyncMock(return_value=None)
-
-        repository.save.return_value = account
-
-        result = await service.create(user, create_account_payload)
-
-        assert result == account
-        saved_entity = repository.save.await_args.kwargs["entity"]
-        assert saved_entity.user_id == user.id
-        assert saved_entity.icon == create_account_payload.icon
-        assert saved_entity.type == create_account_payload.type
-        assert saved_entity.name == create_account_payload.name
-        assert saved_entity.color == create_account_payload.color
-        assert saved_entity.agency == create_account_payload.agency
-        assert saved_entity.is_active == create_account_payload.is_active
-        assert saved_entity.description == create_account_payload.description
-        assert saved_entity.account_number == create_account_payload.account_number
-        assert (
-            saved_entity.financial_institution
-            == create_account_payload.financial_institution
-        )
-        service.find_by.assert_awaited_once_with(
-            user_id=user.id,
-            name=create_account_payload.name,
-            without_throw=True,
-        )
-        repository.save.assert_awaited_once()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_rejects_duplicate_account(
-        user, account, create_account_payload
-    ):
-        repository = AsyncMock()
-        service = AccountService(repository)
-        service.find_by = AsyncMock(return_value=account)
-
-        with pytest.raises(HTTPException) as exc:
-            await service.create(user, create_account_payload)
-
-        assert exc.value.status_code == HTTPStatus.CONFLICT
-        assert exc.value.detail == "Account already exists"
-        repository.save.assert_not_awaited()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_create_handles_repository_exception(user, create_account_payload):
-        repository = AsyncMock()
-        repository.save.side_effect = RuntimeError("database failure")
-        service = AccountService(repository)
-        service.find_by = AsyncMock(return_value=None)
-
-        with pytest.raises(HTTPException) as exc:
-            await service.create(user, create_account_payload)
-
-        assert exc.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-        assert exc.value.detail == "Internal server error"
-        repository.save.assert_awaited_once()
-
-
-class TestAccountServiceUpdate:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_partial_update_preserves_omitted_name_and_type(user, account):
-        repository = AsyncMock()
-        repository.find_by.return_value = account
-        service = AccountService(repository)
-        service._invalidate_cache = AsyncMock()
-        original_name, original_type = account.name, account.type
-
-        await service.update(str(account.id), AccountUpdateSchema(color="Blue"), user)
-
-        assert account.color == "Blue"
-        assert account.name == original_name
-        assert account.type == original_type
-        repository.update.assert_awaited_once_with(entity=account)
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_account_requires_matching_owner(
-        user, account, update_account_payload
-    ):
-        repository = AsyncMock()
-        repository.update.return_value = account
-        service = AccountService(repository)
-        service.find_by = AsyncMock(return_value=account)
-        service._invalidate_cache = AsyncMock()
-
         result = await service.update(
-            param=str(account.id),
-            update_schema=update_account_payload,
-            user=user,
+            identifier, AccountUpdateSchema(name="After"), user
         )
-
-        assert isinstance(result, Message)
-        service.find_by.assert_awaited_once_with(
-            id=str(account.id), user_id=user.id, user_request=user.username
-        )
-        repository.update.assert_awaited_once_with(entity=account)
-        service._invalidate_cache.assert_awaited_once_with(identifier=str(account.id))
-        assert account.name == update_account_payload.name
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_account_returns_not_found_for_another_users_account(
-        user, account, update_account_payload
-    ):
-        repository = AsyncMock()
-        service = AccountService(repository)
-        service.find_by = AsyncMock(return_value=None)
-
-        with pytest.raises(HTTPException) as exc:
-            await service.update(
-                param=str(account.id),
-                update_schema=update_account_payload,
-                user=user,
-            )
-
-        assert exc.value.status_code == HTTPStatus.NOT_FOUND
-        assert exc.value.detail == "Account not found"
-        service.find_by.assert_awaited_once_with(
-            id=str(account.id), user_id=user.id, user_request=user.username
-        )
-        repository.update.assert_not_awaited()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_uses_real_lookup_without_logging_metadata(
-        user, account, update_account_payload
-    ):
-        session = AsyncMock()
-        session.scalar.return_value = account
-        service = AccountService(AccountRepository(session))
-        service._invalidate_cache = AsyncMock()
-        service.repository.update = AsyncMock()
-        update_account_payload.name = "Updated account"
-
-        result = await service.update(
-            param=str(account.id), update_schema=update_account_payload, user=user
-        )
-
-        assert isinstance(result, Message)
-        session.scalar.assert_awaited_once()
-        params = session.scalar.await_args.args[0].compile().params
-        assert set(params.values()) == {str(account.id), user.id}
-        assert account.name == "Updated account"
-        service.repository.update.assert_awaited_once_with(entity=account)
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_update_reports_repository_failure(
-        user, account, update_account_payload
-    ):
-        repository = AsyncMock()
-        repository.find_by.return_value = account
-        repository.update.side_effect = RuntimeError("database failure")
-        service = AccountService(repository)
-        service._invalidate_cache = AsyncMock()
-
-        with pytest.raises(HTTPException) as exc:
-            await service.update(str(account.id), update_account_payload, user)
-
-        assert exc.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert isinstance(result, Message)
+    warning.assert_called_once()
+    assert (
+        await service.find_by(user=user, filters={"id": identifier})
+    ).name == "After"
 
 
-class TestAccountServiceFindBy:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_find_by_does_not_pass_logging_or_control_flags_to_repository(
-        user, account
-    ):
-        repository = AsyncMock()
-        repository.find_by.return_value = account
-
-        result = await AccountService(repository).find_by(
-            id=account.id,
-            user_id=user.id,
-            user_request=user.username,
-            without_throw=True,
-        )
-
-        assert result is account
-        repository.find_by.assert_awaited_once_with(
-            id=account.id, name=None, user_id=user.id
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("found", [True, False])
-    async def test_get_account_reaches_database_with_owner_filter(user, account, found):
-        session = AsyncMock()
-        session.scalar.return_value = account if found else None
-        service = AccountService(AccountRepository(session))
-
-        if found:
-            result = await find_one(str(account.id), service, user)
-            assert result is account
-        else:
-            with pytest.raises(HTTPException) as exc:
-                await find_one(str(account.id), service, user)
-            assert exc.value.status_code == HTTPStatus.NOT_FOUND
-
-        session.scalar.assert_awaited_once()
-        query = session.scalar.await_args.args[0]
-        assert "accounts.id =" in str(query)
-        assert "accounts.user_id =" in str(query)
-        assert set(query.compile().params.values()) == {str(account.id), user.id}
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_find_by_returns_none_only_for_optional_missing_account(user):
-        repository = AsyncMock()
-        repository.find_by.return_value = None
-
-        result = await AccountService(repository).find_by(
-            name="Missing", user_id=user.id, without_throw=True
-        )
-
-        assert result is None
-        repository.find_by.assert_awaited_once_with(
-            id=None, name="Missing", user_id=user.id
-        )
-
-    @staticmethod
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("without_throw", [True, False])
-    async def test_find_by_does_not_hide_database_failures(user, without_throw):
-        repository = AsyncMock()
-        repository.find_by.side_effect = RuntimeError("database failure")
-
-        with pytest.raises(HTTPException) as exc:
-            await AccountService(repository).find_by(
-                id=uuid4(), user_id=user.id, without_throw=without_throw
-            )
-
-        assert exc.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+async def test_find_by_name_used_for_uniqueness(service, user):
+    with patch.object(
+        service.repository, "find_by_name", wraps=service.repository.find_by_name
+    ) as find_by_name:
+        await service.create(user, _create_payload("Unique"))
+    find_by_name.assert_awaited_once_with(user_id=user.id, name="Unique")
 
 
-class TestAccountServiceDelete:
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_delete_reports_database_failure(user, account):
-        repository = AsyncMock()
-        repository.find_by.return_value = account
-        repository.delete.side_effect = RuntimeError("database failure")
-
-        with pytest.raises(HTTPException) as exc:
-            await AccountService(repository).delete(user, str(account.id))
-
-        assert exc.value.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-        assert exc.value.detail == "Internal server error"
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_delete_queries_owner_before_removing_account(user, account):
-        repository = AsyncMock()
-        repository.find_by.return_value = account
-
-        result = await AccountService(repository).delete(user, str(account.id))
-
-        assert isinstance(result, Message)
-        repository.find_by.assert_awaited_once_with(
-            id=str(account.id), name=None, user_id=user.id
-        )
-        repository.delete.assert_awaited_once_with(entity=account)
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_delete_rejects_missing_or_foreign_account(user):
-        repository = AsyncMock()
-        repository.find_by.return_value = None
-
-        with pytest.raises(HTTPException) as exc:
-            await AccountService(repository).delete(user, str(uuid4()))
-
-        assert exc.value.status_code == HTTPStatus.NOT_FOUND
-        repository.delete.assert_not_awaited()
+def _valid_data(name: str = "Principal") -> dict[str, object]:
+    return {
+        "name": name,
+        "type": AccountTypeEnum.CASH,
+        "is_active": True,
+    }
 
 
-class TestAccountServiceCache:
-    @staticmethod
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("identifier", [None, "account-id"])
-    async def test_invalidate_cache_clears_domain_and_namespaced_key(identifier):
-        service = AccountService(AsyncMock())
-        service.cache_service = Mock()
-        service.cache_service.delete_with_parent_cache = AsyncMock()
-        service.cache_service.cache.delete_cache = AsyncMock()
-        service.cache_service.build_key_one.return_value = "account:account-id"
-
-        await service._invalidate_cache(identifier)
-
-        service.cache_service.delete_with_parent_cache.assert_awaited_once_with()
-        if identifier:
-            service.cache_service.build_key_one.assert_called_once_with(
-                param=identifier
-            )
-            service.cache_service.cache.delete_cache.assert_awaited_once_with(
-                "account:account-id"
-            )
-        else:
-            service.cache_service.cache.delete_cache.assert_not_awaited()
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_cache_failure_is_logged_without_blocking_database_update(
-        user, account, update_account_payload, caplog
-    ):
-        repository = AsyncMock()
-        repository.find_by.return_value = account
-        service = AccountService(repository)
-        service.cache_service.delete_with_parent_cache = AsyncMock(
-            side_effect=RuntimeError("cache unavailable")
-        )
-
-        result = await service.update(str(account.id), update_account_payload, user)
-
-        assert isinstance(result, Message)
-        repository.update.assert_awaited_once_with(entity=account)
-        assert "Cache invalidation skipped" in caplog.text
+async def test_build_entity_rejects_non_string_name(service, user):
+    with pytest.raises(ValueError, match="name and type"):
+        service._build_entity(user.id, {**_valid_data(), "name": 123})
 
 
-@pytest.mark.asyncio
-async def test_failed_create_does_not_log_success(user, create_account_payload):
-    repository = AsyncMock()
-    repository.find_by.side_effect = RuntimeError("database failure")
-    service = AccountService(repository)
+async def test_build_entity_rejects_missing_type(service, user):
+    data = _valid_data()
+    data.pop("type")
+    with pytest.raises(ValueError, match="name and type"):
+        service._build_entity(user.id, data)
 
-    with patch("app.domain.account.service.log_service_success") as log_success:
-        with pytest.raises(HTTPException):
-            await service.create(user, create_account_payload)
 
-    log_success.assert_not_called()
-    repository.save.assert_not_awaited()
+async def test_build_entity_rejects_non_bool_is_active(service, user):
+    with pytest.raises(ValueError, match="is_active"):
+        service._build_entity(user.id, {**_valid_data(), "is_active": 1})
+
+
+async def test_normalize_rejects_non_string_name(service, user):
+    with pytest.raises(ValueError, match="name must be a string"):
+        await service._normalize({"name": 123}, user)
