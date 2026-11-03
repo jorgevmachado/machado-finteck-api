@@ -1,5 +1,5 @@
 from app.models import Institution
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 
 class InstitutionRepository(BaseRepository[Institution]):

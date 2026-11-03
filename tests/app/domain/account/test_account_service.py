@@ -14,7 +14,7 @@ from app.domain.account.schema import (
 from app.domain.account.service import AccountService
 from app.models import Account, AccountTypeEnum
 from app.shared.schemas import FilterPage, Message
-from app.temp import BaseService
+from app.core.service import BaseService
 
 pytestmark = pytest.mark.asyncio
 

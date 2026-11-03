@@ -47,11 +47,11 @@ def test_find_builds_real_service_and_repository_from_injected_session(
 def route_service(client, user, profile):
     response = ReceiptRulesSchema.model_validate(profile)
     service = AsyncMock()
-    service.create.return_value = response
-    service.find_by.return_value = response
-    service.list_all.return_value = [response]
-    service.update.return_value = Message(message="updated")
-    service.delete.return_value = Message(message="deleted")
+    service.create_profile.return_value = response
+    service.find_profile.return_value = response
+    service.list_profiles.return_value = [response]
+    service.update_profile.return_value = Message(message="updated")
+    service.delete_profile.return_value = Message(message="deleted")
     service.seed_defaults.return_value = ReceiptRulesSeedSchema(created=4, skipped=0)
     app.dependency_overrides[receipt_rule_service] = lambda: service
     app.dependency_overrides[get_current_user] = lambda: user
@@ -93,7 +93,7 @@ def test_create_validates_and_delegates_complete_nested_payload(
     assert response.json()["scope"] == "private"
     assert "user_id" not in response.json()
     assert "profile_id" not in response.json()["field_rules"][0]
-    route_service.create.assert_awaited_once_with(
+    route_service.create_profile.assert_awaited_once_with(
         user=user, payload=ReceiptRulesCreateSchema.model_validate(payload)
     )
 
@@ -110,12 +110,12 @@ def test_list_filters_and_pagination_envelope(client, route_service, user, profi
         },
     )
     assert response.status_code == 200 and isinstance(response.json(), list)
-    args = route_service.list_all.await_args.kwargs
+    args = route_service.list_profiles.await_args.kwargs
     assert args["user"] is user
     filters = args["page_filter"]
     assert filters.name == "Meu Banco" and filters.institution_code == "BANK"
     assert filters.scope == "private" and filters.offset == 2 and filters.limit == 2
-    route_service.list_all.return_value = CustomLimitOffsetPage[
+    route_service.list_profiles.return_value = CustomLimitOffsetPage[
         ReceiptRulesSchema
     ].create(
         [ReceiptRulesSchema.model_validate(profile)],
@@ -133,7 +133,9 @@ def test_find_update_and_delete_delegate_uuid_and_authenticated_user(
 ):
     path = f"{PREFIX}/{profile.id}"
     assert client.get(path).json()["id"] == str(profile.id)
-    route_service.find_by.assert_awaited_once_with(profile_id=profile.id, user=user)
+    route_service.find_profile.assert_awaited_once_with(
+        profile_id=profile.id, user=user
+    )
     payload = {
         "name": "Renamed",
         "field_rules": [{"id": str(profile.field_rules[0].id), **rule_payload}],
@@ -141,13 +143,15 @@ def test_find_update_and_delete_delegate_uuid_and_authenticated_user(
     }
     response = client.put(path, json=payload)
     assert response.status_code == 200 and response.json() == {"message": "updated"}
-    route_service.update.assert_awaited_once_with(
+    route_service.update_profile.assert_awaited_once_with(
         profile_id=profile.id,
         payload=ReceiptRulesUpdateSchema.model_validate(payload),
         user=user,
     )
     assert client.delete(path).json() == {"message": "deleted"}
-    route_service.delete.assert_awaited_once_with(profile_id=profile.id, user=user)
+    route_service.delete_profile.assert_awaited_once_with(
+        profile_id=profile.id, user=user
+    )
 
 
 def test_seed_needs_no_body_delegates_and_reports_repeat(client, route_service, user):
@@ -165,7 +169,7 @@ def test_seed_needs_no_body_delegates_and_reports_repeat(client, route_service, 
 def test_service_errors_preserve_status_and_detail(
     client, route_service, profile, status
 ):
-    route_service.update.side_effect = HTTPException(status, "domain error")
+    route_service.update_profile.side_effect = HTTPException(status, "domain error")
     response = client.put(f"{PREFIX}/{profile.id}", json={})
     assert response.status_code == status
     assert response.json() == {"detail": "domain error"}
@@ -178,7 +182,10 @@ def test_malformed_uuid_is_rejected_before_service(client, route_service, method
     )
     assert response.status_code == 422
     getattr(
-        route_service, {"get": "find_by", "put": "update", "delete": "delete"}[method]
+        route_service,
+        {"get": "find_profile", "put": "update_profile", "delete": "delete_profile"}[
+            method
+        ],
     ).assert_not_awaited()
 
 
@@ -207,7 +214,7 @@ def test_invalid_updates_are_rejected_before_service(
     client, route_service, profile, payload
 ):
     assert client.put(f"{PREFIX}/{profile.id}", json=payload).status_code == 422
-    route_service.update.assert_not_awaited()
+    route_service.update_profile.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -232,7 +239,7 @@ def test_create_rejects_managed_fields_and_shared_general(client, route_service,
         PREFIX, json={"name": "Bank", "institution_code": "BANK"} | extra
     )
     assert response.status_code == 422
-    route_service.create.assert_not_awaited()
+    route_service.create_profile.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -246,7 +253,7 @@ def test_create_rejects_managed_fields_and_shared_general(client, route_service,
 )
 def test_invalid_query_is_rejected_before_service(client, route_service, params):
     assert client.get(PREFIX, params=params).status_code == 422
-    route_service.list_all.assert_not_awaited()
+    route_service.list_profiles.assert_not_awaited()
 
 
 @pytest.mark.parametrize("authorization", [None, "Bearer invalid-token"])

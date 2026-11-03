@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from fastapi_pagination import LimitOffsetParams
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.pagination import CustomLimitOffsetPage
@@ -43,14 +44,17 @@ async def test_list_all_passes_active_filter_and_preserves_live_children(
     rules_repository.list_all.return_value = [profile]
 
     filters = ReceiptRulesFilter(is_active=True, scope="private", limit=None)
-    result = await ReceiptRulesService(rules_repository).list_all(filters, user)
+    result = await ReceiptRulesService(rules_repository).list_profiles(filters, user)
 
     rules_repository.list_all.assert_awaited_once_with(
-        filters,
+        page_filter=filters,
         user_id=user.id,
     )
     assert len(result) == 1
-    assert [rule.pattern for rule in result[0].identification_rules] == ["BANK", "inactive"]
+    assert [rule.pattern for rule in result[0].identification_rules] == [
+        "BANK",
+        "inactive",
+    ]
     assert [rule.field_name for rule in result[0].field_rules] == ["payer", "category"]
 
 
@@ -64,12 +68,12 @@ async def test_create_owns_nested_aggregate_and_logs_only_after_commit(
         field_rules=[rule_payload],
         identification_rules=[{"pattern": "BANK", "weight": 2}],
     )
-    with patch(f"{MODULE}.log_service_success") as success:
+    with patch("app.core.service.base.log_service_success") as success:
         success.side_effect = lambda *args, **kwargs: (
             None if rules_repository.committed else pytest.fail("Success before commit")
         )
-        result = await service.create(user, payload)
-    entity = rules_repository.save.await_args.args[0]
+        result = await service.create_profile(user, payload)
+    entity = rules_repository.save_profile.await_args.args[0]
     assert entity.user_id == user.id
     assert result.id == entity.id and result.scope == "private"
     assert entity.field_rules[0].configuration["parser"] == "text"
@@ -82,12 +86,39 @@ async def test_create_duplicate_returns_conflict_without_save(
 ):
     rules_repository.find_by_code.return_value = profile
     with pytest.raises(HTTPException) as caught:
-        await ReceiptRulesService(rules_repository).create(
+        await ReceiptRulesService(rules_repository).create_profile(
             user, ReceiptRulesCreateSchema(name="Other name", institution_code="BANK")
         )
     assert caught.value.status_code == 409
-    rules_repository.save.assert_not_awaited()
+    rules_repository.save_profile.assert_not_awaited()
     assert rules_repository.rolled_back
+
+
+async def test_entity_builder_validates_and_normalizes_nested_payload(
+    rules_repository, user, rule_payload
+):
+    service = ReceiptRulesService(rules_repository)
+    entity = service._build_entity(
+        user.id,
+        {
+            "name": "  Bank  ",
+            "institution_code": " bank ",
+            "field_rules": [rule_payload],
+            "identification_rules": [{"pattern": "BANK", "weight": 2}],
+        },
+    )
+    assert entity.name == "Bank"
+    assert entity.institution_code == "BANK"
+    assert entity.user_id == user.id
+    assert entity.field_rules[0].profile_id == entity.id
+    assert entity.field_rules[0].configuration["parser"] == "text"
+    assert entity.identification_rules[0].profile_id == entity.id
+    assert entity.identification_rules[0].pattern == "BANK"
+    with pytest.raises(ValidationError):
+        service._build_entity(
+            user.id, {"name": "Bank", "institution_code": "BANK", "is_active": "yes"}
+        )
+    rules_repository.save_profile.assert_not_awaited()
 
 
 async def test_list_and_find_map_complete_aggregate_and_keep_pagination(
@@ -96,17 +127,19 @@ async def test_list_and_find_map_complete_aggregate_and_keep_pagination(
     service = ReceiptRulesService(rules_repository)
     rules_repository.list_all.return_value = [profile]
     filters = ReceiptRulesFilter()
-    result = await service.list_all(filters, user)
+    result = await service.list_profiles(filters, user)
     assert result[0].id == profile.id
-    rules_repository.list_all.assert_awaited_with(filters, user_id=user.id)
+    rules_repository.list_all.assert_awaited_with(page_filter=filters, user_id=user.id)
     rules_repository.list_all.return_value = CustomLimitOffsetPage.create(
         [profile], params=LimitOffsetParams(limit=2, offset=0), total=5
     )
-    page = await service.list_all(filters, user)
+    page = await service.list_profiles(filters, user)
     assert page.meta.total == 5 and page.items[0].id == profile.id
     rules_repository.find_by.return_value = profile
-    assert (await service.find_by(profile.id, user)).id == profile.id
-    rules_repository.find_by.assert_awaited_with(id=profile.id, user_id=user.id)
+    assert (await service.find_profile(profile.id, user)).id == profile.id
+    rules_repository.find_by.assert_awaited_with(
+        filters={"id": profile.id}, user_id=user.id
+    )
 
 
 @pytest.mark.parametrize("operation", ["find_by", "update", "delete"])
@@ -116,12 +149,15 @@ async def test_missing_or_foreign_profiles_return_404(
     service = ReceiptRulesService(rules_repository)
     with pytest.raises(HTTPException) as caught:
         if operation == "update":
-            await service.update(uuid4(), ReceiptRulesUpdateSchema(), user)
+            await service.update_profile(uuid4(), ReceiptRulesUpdateSchema(), user)
         else:
-            await getattr(service, operation)(uuid4(), user)
+            await getattr(
+                service,
+                {"find_by": "find_profile", "delete": "delete_profile"}[operation],
+            )(uuid4(), user)
     assert caught.value.status_code == 404
-    rules_repository.save.assert_not_awaited()
-    rules_repository.delete.assert_not_awaited()
+    rules_repository.save_profile.assert_not_awaited()
+    rules_repository.delete_profile.assert_not_awaited()
 
 
 @pytest.mark.parametrize("operation", ["update", "delete"])
@@ -130,17 +166,17 @@ async def test_general_is_read_only(rules_repository, user, profile, operation):
     profile.institution_code = None
     rules_repository.find_by.return_value = profile
     service = ReceiptRulesService(rules_repository)
-    assert (await service.find_by(profile.id, user)).scope == "system"
+    assert (await service.find_profile(profile.id, user)).scope == "system"
     with pytest.raises(HTTPException) as caught:
         if operation == "update":
-            await service.update(
+            await service.update_profile(
                 profile.id, ReceiptRulesUpdateSchema(name="Changed"), user
             )
         else:
-            await service.delete(profile.id, user)
+            await service.delete_profile(profile.id, user)
     assert caught.value.status_code == 403
-    rules_repository.save.assert_not_awaited()
-    rules_repository.delete.assert_not_awaited()
+    rules_repository.save_profile.assert_not_awaited()
+    rules_repository.delete_profile.assert_not_awaited()
 
 
 async def test_update_omission_empty_and_mixed_collections(
@@ -148,12 +184,14 @@ async def test_update_omission_empty_and_mixed_collections(
 ):
     service = ReceiptRulesService(rules_repository)
     rules_repository.find_by.return_value = profile
-    await service.update(profile.id, ReceiptRulesUpdateSchema(name="Renamed"), user)
+    await service.update_profile(
+        profile.id, ReceiptRulesUpdateSchema(name="Renamed"), user
+    )
     rules_repository.find_by.assert_awaited_with(
-        id=profile.id, user_id=user.id, for_update=True
+        filters={"id": profile.id}, user_id=user.id, for_update=True
     )
     assert profile.name == "Renamed"
-    assert rules_repository.save.await_args.kwargs == {
+    assert rules_repository.save_profile.await_args.kwargs == {
         "fields": None,
         "identification": None,
     }
@@ -165,8 +203,8 @@ async def test_update_omission_empty_and_mixed_collections(
         ],
         identification_rules=[],
     )
-    await service.update(profile.id, payload, user)
-    plans = rules_repository.save.await_args.kwargs
+    await service.update_profile(profile.id, payload, user)
+    plans = rules_repository.save_profile.await_args.kwargs
     assert plans["fields"].entries[0].id == first.id
     assert plans["fields"].entries[1].id is None
     assert plans["identification"].remove_ids == (profile.identification_rules[0].id,)
@@ -182,10 +220,12 @@ async def test_invalid_second_collection_never_changes_root_or_saves(
         identification_rules=[{"id": uuid4(), "pattern": "BANK", "weight": 1}],
     )
     with pytest.raises(HTTPException) as caught:
-        await ReceiptRulesService(rules_repository).update(profile.id, payload, user)
+        await ReceiptRulesService(rules_repository).update_profile(
+            profile.id, payload, user
+        )
     assert caught.value.status_code == 422
     assert profile.name == "Banco"
-    rules_repository.save.assert_not_awaited()
+    rules_repository.save_profile.assert_not_awaited()
 
 
 async def test_duplicate_final_fields_rejected_before_save(
@@ -193,22 +233,24 @@ async def test_duplicate_final_fields_rejected_before_save(
 ):
     rules_repository.find_by.return_value = profile
     with pytest.raises(HTTPException) as caught:
-        await ReceiptRulesService(rules_repository).update(
+        await ReceiptRulesService(rules_repository).update_profile(
             profile.id,
             ReceiptRulesUpdateSchema(field_rules=[rule_payload, rule_payload]),
             user,
         )
     assert caught.value.status_code == 422
-    rules_repository.save.assert_not_awaited()
+    rules_repository.save_profile.assert_not_awaited()
 
 
 async def test_delete_locks_then_delegates(rules_repository, user, profile):
     rules_repository.find_by.return_value = profile
-    result = await ReceiptRulesService(rules_repository).delete(profile.id, user)
-    rules_repository.find_by.assert_awaited_with(
-        id=profile.id, user_id=user.id, for_update=True
+    result = await ReceiptRulesService(rules_repository).delete_profile(
+        profile.id, user
     )
-    rules_repository.delete.assert_awaited_once_with(profile)
+    rules_repository.find_by.assert_awaited_with(
+        filters={"id": profile.id}, user_id=user.id, for_update=True
+    )
+    rules_repository.delete_profile.assert_awaited_once_with(profile)
     assert str(profile.id) in result.message and rules_repository.committed
 
 
@@ -223,20 +265,23 @@ async def test_infrastructure_errors_are_not_success_or_empty(
     rules_repository.find_by_code.side_effect = failure
     rules_repository.list_all.side_effect = failure
     service = ReceiptRulesService(rules_repository)
-    with patch(f"{MODULE}.log_service_success") as success:
+    with patch("app.core.service.base.log_service_success") as success:
         with pytest.raises(HTTPException) as caught:
             if operation == "create":
-                await service.create(
+                await service.create_profile(
                     user, ReceiptRulesCreateSchema(name="Bank", institution_code="BANK")
                 )
             elif operation == "update":
-                await service.update(uuid4(), ReceiptRulesUpdateSchema(), user)
+                await service.update_profile(uuid4(), ReceiptRulesUpdateSchema(), user)
             elif operation == "list_all":
-                await service.list_all(ReceiptRulesFilter(), user)
+                await service.list_profiles(ReceiptRulesFilter(), user)
             elif operation == "seed_defaults":
                 await service.seed_defaults(user)
             else:
-                await getattr(service, operation)(uuid4(), user)
+                await getattr(
+                    service,
+                    {"find_by": "find_profile", "delete": "delete_profile"}[operation],
+                )(uuid4(), user)
     assert caught.value.status_code == 500 and caught.value.__cause__ is failure
     success.assert_not_called()
 
@@ -264,9 +309,9 @@ async def test_commit_failure_does_not_read_expired_user_metadata(rules_reposito
         raise RuntimeError("commit failed")
 
     rules_repository.transaction = fail_commit
-    with patch(f"{MODULE}.log_service_success") as success:
+    with patch("app.core.service.base.log_service_success") as success:
         with pytest.raises(HTTPException) as caught:
-            await ReceiptRulesService(rules_repository).create(
+            await ReceiptRulesService(rules_repository).create_profile(
                 ExpiringUser(),
                 ReceiptRulesCreateSchema(name="Bank", institution_code="BANK"),
             )
@@ -275,17 +320,51 @@ async def test_commit_failure_does_not_read_expired_user_metadata(rules_reposito
     success.assert_not_called()
 
 
-async def test_integrity_translation_only_recognizes_known_constraint():
+async def test_integrity_translation_only_recognizes_known_constraint(rules_repository):
+    service = ReceiptRulesService(rules_repository)
     diagnostic = RuntimeError("duplicate")
     diagnostic.diag = SimpleNamespace(
         constraint_name="uq_receipt_profiles_owner_institution_live"
     )
     wrapper = RuntimeError("wrapped")
     wrapper.__cause__ = diagnostic
-    error = ReceiptRulesService._translate_error(IntegrityError("insert", {}, wrapper))
+    error = service._translate_exception(IntegrityError("insert", {}, wrapper))
     assert isinstance(error, HTTPException) and error.status_code == 409
     unknown = IntegrityError("insert", {}, RuntimeError("unknown constraint"))
-    assert ReceiptRulesService._translate_error(unknown) is unknown
+    assert service._translate_exception(unknown) is unknown
+
+
+async def test_inherited_operation_translates_profile_integrity_error(
+    rules_repository, user
+):
+    diagnostic = RuntimeError("duplicate")
+    diagnostic.diag = SimpleNamespace(
+        constraint_name="uq_receipt_profiles_owner_institution_live"
+    )
+    rules_repository.save_profile.side_effect = IntegrityError("insert", {}, diagnostic)
+    with patch("app.core.service.base.log_service_success") as success:
+        with pytest.raises(HTTPException) as caught:
+            await ReceiptRulesService(rules_repository).create_profile(
+                user, ReceiptRulesCreateSchema(name="Bank", institution_code="BANK")
+            )
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "Institution profile already exists"
+    assert rules_repository.rolled_back
+    success.assert_not_called()
+
+
+async def test_inherited_operation_logs_domain_context_after_commit(
+    rules_repository, user, profile
+):
+    rules_repository.find_by.return_value = profile
+    with patch("app.core.service.base.log_service_success") as success:
+        await ReceiptRulesService(rules_repository).delete_profile(profile.id, user)
+    context = success.call_args.kwargs
+    assert context["operation"] == "delete"
+    assert context["user_request"] == user.username
+    assert context["logger"].extra == {"target_id": str(profile.id)}
+    assert context["logger"].logger.name == MODULE
+    assert rules_repository.committed
 
 
 @pytest.mark.parametrize(
@@ -330,5 +409,5 @@ async def test_invalid_persisted_rule_and_engine_failures_are_explicit(
     assert caught.value.status_code == 500
     rule.configuration = {"strategy": "unknown"}
     with pytest.raises(HTTPException) as caught:
-        await service.find_by(profile.id, user)
+        await service.find_profile(profile.id, user)
     assert caught.value.status_code == 500

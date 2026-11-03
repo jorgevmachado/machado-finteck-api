@@ -11,7 +11,7 @@ from app.domain.payer.repository import PayerRepository
 from app.domain.payer.schema import PayerCreateSchema, PayerSchema, PayerUpdateSchema
 from app.models import Payer, User
 from app.shared.utils.string import to_snake_case
-from app.temp import BaseService
+from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
 

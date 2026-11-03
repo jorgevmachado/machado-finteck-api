@@ -19,12 +19,12 @@ normalizados para evitar cadastros duplicados por usuário.
 |---|---|
 | `route.py` | Endpoints protegidos em `/payers` |
 | `schema.py` | Validação dos contratos de entrada e saída |
-| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização, unicidade e `resolve` |
-| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository`; normaliza IDs |
+| `service.py` | Herda CRUD de `app.core.BaseService`; especializa normalização, unicidade e `resolve` |
+| `repository.py` | Herda consultas, ownership e persistência de `app.core.BaseRepository`; normaliza IDs |
 
 ## Piloto das bases
 
-Este é o primeiro domínio integrado às bases de `app/temp`. Listagem, busca,
+Este é o primeiro domínio integrado às bases de `app/core`. Listagem, busca,
 criação, atualização e exclusão são herdadas, sem reimplementar seus fluxos.
 `_operation` centraliza erros e logs, seguindo a tática de receipt.
 `resolve` reutiliza os helpers internos para evitar tradução e logs duplicados.

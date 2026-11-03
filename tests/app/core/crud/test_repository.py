@@ -9,8 +9,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.pagination import CustomLimitOffsetPage
 from app.shared.schemas import FilterPage
-from app.temp import BaseRepository, RangeFilter, RelationFilter
-from tests.app.temp.conftest import Child, Item, ItemRepository
+from app.core.repository import BaseRepository, RangeFilter, RelationFilter
+from tests.app.core.crud.conftest import Child, Item, ItemRepository
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,6 +24,78 @@ async def test_lookup_is_scoped_to_owner(repository, records, user):
         await repository.find_by(user_id=user.id, filters={"id": records[2].id}) is None
     )
     assert await repository.find_by(user_id=user.id, filters={"id": uuid4()}) is None
+
+
+async def test_count_preserves_owner_filters_and_pagination(repository, records, user):
+    assert await repository.count(user_id=user.id) == 2
+    assert await repository.count(user_id=records[2].user_id, filters={}) == 1
+    assert await repository.count(user_id=uuid4()) == 0
+    filters = {
+        "child_label": "matching",
+        "start_date": date(2026, 1, 1),
+        "end_date": date(2026, 1, 1),
+    }
+    before = filters.copy()
+    total = await repository.count(user_id=user.id, filters=filters)
+    page = await repository.list_all(
+        user_id=user.id, page_filter=FilterPage.build(limit=1, offset=0, **filters)
+    )
+    assert total == page.meta.total == 1
+    assert filters == before
+    assert (
+        await repository.count(user_id=user.id, filters={"id": str(records[0].id)}) == 1
+    )
+    assert await repository.count(user_id=user.id, filters={"id": records[2].id}) == 0
+    assert await repository.count(user_id=user.id, filters={"name": "missing"}) == 0
+
+
+async def test_count_respects_visibility_and_filter_hooks(repository, records, user):
+    class RestrictedRepository(ItemRepository):
+        def _visibility(self):
+            return (Item.id != records[0].id,)
+
+        def _build_filter(self, query, filters):
+            return super()._build_filter(query, filters).where(Item.name == "Same")
+
+    repository.session.add(Item(user_id=user.id, name="Other"))
+    await repository.session.commit()
+    specialized = RestrictedRepository(repository.session)
+    assert await specialized.count(user_id=user.id) == 1
+    assert await specialized.count(user_id=records[2].user_id) == 1
+    page = await specialized.list_all(
+        user_id=user.id, page_filter=FilterPage.build(limit=1, offset=0)
+    )
+    assert page.meta.total == 1
+    assert page.items == [records[1]]
+
+
+@pytest.mark.parametrize(
+    "filters", [{"unknown": "value"}, {"user_id": uuid4()}, {"id": "invalid"}]
+)
+async def test_count_rejects_invalid_filters_before_sql(filters, user):
+    session = AsyncMock()
+    with pytest.raises(ValueError):
+        await ItemRepository(session).count(user_id=user.id, filters=filters)
+    session.scalar.assert_not_awaited()
+    session.scalars.assert_not_awaited()
+
+
+@pytest.mark.parametrize("owner", [None, "", "invalid"])
+async def test_count_requires_trusted_owner_before_sql(owner):
+    session = AsyncMock()
+    with pytest.raises(ValueError, match="owner"):
+        await ItemRepository(session).count(user_id=owner)
+    session.scalar.assert_not_awaited()
+    session.scalars.assert_not_awaited()
+
+
+async def test_logical_deletion_requires_mapped_deleted_at():
+    class InvalidRepository(BaseRepository[Child]):
+        model = Child
+        soft_delete = True
+
+    with pytest.raises(ValueError, match="Not a mapped column: deleted_at"):
+        InvalidRepository(AsyncMock())
 
 
 async def test_uuid_strings_are_normalized_without_subclass_override(
@@ -397,7 +469,7 @@ async def test_rollback_failure_keeps_original_cause(repository):
     with (
         patch.object(session, "commit", side_effect=RuntimeError("commit failed")),
         patch.object(session, "rollback", side_effect=RuntimeError("connection lost")),
-        patch("app.temp.repository.logger.exception") as log,
+        patch("app.core.repository.base.logger.exception") as log,
         pytest.raises(RuntimeError, match="commit failed"),
     ):
         async with repository.transaction():

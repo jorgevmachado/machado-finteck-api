@@ -16,8 +16,8 @@ from sqlalchemy.orm import (
     selectinload,
 )
 
-from app.temp.repository import BaseRepository, RangeFilter, RelationFilter
-from app.temp.service import BaseService
+from app.core.repository.base import BaseRepository, RangeFilter, RelationFilter
+from app.core.service.base import BaseService
 from app.core.logging import LoggingParams
 from app.core.cache.manager import CacheManager
 from tests.conftest import FakeRedis

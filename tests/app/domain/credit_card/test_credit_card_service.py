@@ -14,7 +14,7 @@ from app.domain.credit_card.schema import (
 from app.domain.credit_card.service import CreditCardService
 from app.models import CreditCard, CreditCardBrandEnum
 from app.shared.schemas import FilterPage, Message
-from app.temp import BaseService
+from app.core.service import BaseService
 
 pytestmark = pytest.mark.asyncio
 

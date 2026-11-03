@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from app.domain.receipt.rules.business import build_reconciliation_plan
@@ -11,8 +13,21 @@ from app.domain.receipt.rules.identification.schema import (
     ReceiptIdentificationRuleReconcileSchema,
 )
 from app.domain.receipt.rules.repository import ReceiptRulesRepository
-from app.domain.receipt.rules.schema import ReceiptRulesFilter
-from app.models import ReceiptFieldRule, ReceiptIdentificationRule
+from app.domain.receipt.rules.schema import (
+    ReceiptRulesCreateSchema,
+    ReceiptRulesFilter,
+    ReceiptRulesUpdateSchema,
+)
+from app.domain.receipt.rules.service import ReceiptRulesService
+from app.models import (
+    ReceiptFieldRule,
+    ReceiptIdentificationRule,
+    ReceiptInterpretationProfile,
+    Role,
+    User,
+)
+from app.core.repository import BaseRepository
+from app.shared.schemas import FilterPage
 
 pytestmark = pytest.mark.asyncio
 MODULE = "app.domain.receipt.rules.repository"
@@ -28,7 +43,9 @@ async def test_list_all_filters_activity_without_pagination(
 ):
     rules_session.scalars.return_value.all.return_value = [profile]
     result = await ReceiptRulesRepository(rules_session).list_all(
-        ReceiptRulesFilter(is_active=is_active, scope="private", limit=None),
+        page_filter=ReceiptRulesFilter(
+            is_active=is_active, scope="private", limit=None
+        ),
         user_id=profile.user_id,
     )
     assert result == [profile]
@@ -37,13 +54,65 @@ async def test_list_all_filters_activity_without_pagination(
     assert profile.user_id in query.compile().params.values()
     assert "user_id =" in statement
     if is_active is None:
-        assert "is_active IS" not in statement
+        assert "is_active =" not in statement
     else:
-        assert f"is_active IS {str(is_active).lower()}" in statement
+        assert f"is_active = {str(is_active).lower()}" in statement
     assert statement.count("user_id =") == 2
     assert "deleted_at IS NULL" in statement
     assert "LIMIT" not in statement
     assert len(query._with_options) == 2
+
+
+@pytest.mark.parametrize("page_filter", [None, FilterPage()])
+async def test_list_accepts_base_filter_or_no_filter(
+    rules_session, profile, page_filter
+):
+    rules_session.scalars.return_value.all.return_value = [profile]
+    repo: BaseRepository = ReceiptRulesRepository(rules_session)
+    if page_filter is None:
+        result = await repo.list_all(user_id=profile.user_id)
+    else:
+        result = await repo.list_all(user_id=profile.user_id, page_filter=page_filter)
+    assert result == [profile]
+    statement = sql(rules_session.scalars.await_args.args[0])
+    assert "user_id IS NULL" in statement
+    assert "deleted_at IS NULL" in statement
+    assert "LIMIT" not in statement
+
+
+async def test_base_filter_preserves_id_and_pagination(rules_session, profile):
+    repo: BaseRepository = ReceiptRulesRepository(rules_session)
+    rules_session.scalar.return_value = 1
+    rules_session.scalars.return_value.all.return_value = [profile]
+    page_filter = FilterPage.build(id=str(profile.id), offset=0, limit=1)
+    original = page_filter.model_dump()
+    result = await repo.list_all(user_id=profile.user_id, page_filter=page_filter)
+    assert result.items == [profile] and result.meta.total == 1
+    query = rules_session.scalars.await_args.args[0]
+    assert profile.id in query.compile().params.values()
+    assert page_filter.model_dump() == original
+
+
+@pytest.mark.parametrize("filters", [{}, {"unknown": "value"}, {"user_id": uuid4()}])
+async def test_find_rejects_invalid_base_filters_before_sql(
+    rules_session, user, filters
+):
+    repo: BaseRepository = ReceiptRulesRepository(rules_session)
+    with pytest.raises(ValueError):
+        await repo.find_by(user_id=user.id, filters=filters)
+    rules_session.scalar.assert_not_awaited()
+
+
+async def test_find_normalizes_uuid_filter_without_mutating_input(
+    rules_session, profile
+):
+    rules_session.scalar.return_value = profile
+    repo: BaseRepository = ReceiptRulesRepository(rules_session)
+    filters = {"id": str(profile.id)}
+    assert await repo.find_by(user_id=profile.user_id, filters=filters) is profile
+    query = rules_session.scalar.await_args.args[0]
+    assert profile.id in query.compile().params.values()
+    assert filters == {"id": str(profile.id)}
 
 
 async def test_transaction_commits_once_and_adopts_autobegin(rules_session):
@@ -82,7 +151,7 @@ async def test_transaction_preserves_original_exception_if_rollback_fails(
     rules_session,
 ):
     rules_session.rollback.side_effect = RuntimeError("rollback error")
-    with patch(f"{MODULE}.logger") as logger:
+    with patch("app.core.repository.base.logger") as logger:
         with pytest.raises(ValueError, match="original"):
             async with ReceiptRulesRepository(rules_session).transaction():
                 raise ValueError("original")
@@ -102,13 +171,31 @@ async def test_transaction_rejects_nested_contexts_and_savepoints(rules_session)
             pass
 
 
+@pytest.mark.parametrize("rules_outer", [True, False])
+async def test_transaction_rejects_nesting_with_other_temp_repositories(
+    rules_session, rules_outer
+):
+    rules = ReceiptRulesRepository(rules_session)
+    base = BaseRepository(rules_session)
+    outer, inner = (rules, base) if rules_outer else (base, rules)
+    async with outer.transaction():
+        with pytest.raises(RuntimeError, match="Nested"):
+            async with inner.transaction():
+                pass
+        rules_session.commit.assert_not_awaited()
+    rules_session.commit.assert_awaited_once()
+    assert rules_session.info == {}
+
+
 async def test_mutations_and_locks_require_transaction(rules_session, profile):
     repo = ReceiptRulesRepository(rules_session)
     for operation in (
-        lambda: repo.save(profile),
-        lambda: repo.delete(profile),
+        lambda: repo.save_profile(profile),
+        lambda: repo.delete_profile(profile),
         repo.lock_seed,
-        lambda: repo.find_by(id=profile.id, user_id=profile.user_id, for_update=True),
+        lambda: repo.find_by(
+            filters={"id": profile.id}, user_id=profile.user_id, for_update=True
+        ),
     ):
         with pytest.raises(RuntimeError, match="transaction"):
             await operation()
@@ -123,7 +210,7 @@ async def test_find_locks_root_before_reloading_and_missing_lock_returns_none(
     rules_session.scalar.side_effect = [profile, profile]
     async with repo.transaction():
         found = await repo.find_by(
-            id=profile.id, user_id=profile.user_id, for_update=True
+            filters={"id": profile.id}, user_id=profile.user_id, for_update=True
         )
     assert found is profile
     first, second = [call.args[0] for call in rules_session.scalar.await_args_list]
@@ -136,7 +223,9 @@ async def test_find_locks_root_before_reloading_and_missing_lock_returns_none(
     rules_session.scalar.return_value = None
     async with repo.transaction():
         assert (
-            await repo.find_by(id=profile.id, user_id=profile.user_id, for_update=True)
+            await repo.find_by(
+                filters={"id": profile.id}, user_id=profile.user_id, for_update=True
+            )
             is None
         )
     rules_session.scalar.assert_awaited_once()
@@ -145,7 +234,10 @@ async def test_find_locks_root_before_reloading_and_missing_lock_returns_none(
 async def test_find_without_lock_is_scoped_to_owner_or_general(rules_session, profile):
     rules_session.scalar.return_value = profile
     repo = ReceiptRulesRepository(rules_session)
-    assert await repo.find_by(id=profile.id, user_id=profile.user_id) is profile
+    assert (
+        await repo.find_by(filters={"id": profile.id}, user_id=profile.user_id)
+        is profile
+    )
     query = rules_session.scalar.await_args.args[0]
     compiled = query.compile(dialect=postgresql.dialect())
     assert profile.id in compiled.params.values()
@@ -163,7 +255,7 @@ async def test_list_combines_filters_with_visibility_and_orders_roots(
         name="Banco", institution_code="BANK", scope=scope, limit=1
     )
     result = await ReceiptRulesRepository(rules_session).list_all(
-        filters, user_id=profile.user_id
+        page_filter=filters, user_id=profile.user_id
     )
     assert result == [profile]
     query = rules_session.scalars.await_args.args[0]
@@ -174,7 +266,7 @@ async def test_list_combines_filters_with_visibility_and_orders_roots(
     assert "Banco" in compiled.params.values()
     assert "BANK" in compiled.params.values()
     assert (
-        "ORDER BY receipt_interpretation_profiles.created_at, receipt_interpretation_profiles.id"
+        "ORDER BY receipt_interpretation_profiles.created_at ASC, receipt_interpretation_profiles.id ASC"
         in statement
     )
     assert "LIMIT" not in statement  # limit alone keeps list semantics
@@ -189,28 +281,41 @@ async def test_list_combines_filters_with_visibility_and_orders_roots(
         ({"offset": 3, "limit": 2}, 3),
     ],
 )
+@pytest.mark.parametrize("scope", [None, "system", "private"])
 async def test_pagination_counts_roots_separately(
-    rules_session, profile, filters, offset
+    rules_session, profile, filters, offset, scope
 ):
     rules_session.scalar.return_value = 7
     rules_session.scalars.return_value.all.return_value = [profile]
     result = await ReceiptRulesRepository(rules_session).list_all(
-        ReceiptRulesFilter(**filters), user_id=profile.user_id
+        page_filter=ReceiptRulesFilter(
+            **filters,
+            scope=scope,
+            name="Banco",
+            institution_code="BANK",
+            is_active=False,
+        ),
+        user_id=profile.user_id,
     )
     assert result.items == [profile]
     assert result.meta.total == 7
     assert result.meta.offset == offset
     count = rules_session.scalar.await_args.args[0]
-    assert "count(receipt_interpretation_profiles.id)" in sql(count)
+    assert "count(*)" in sql(count)
     assert "JOIN" not in sql(count)
     query = rules_session.scalars.await_args.args[0]
     assert "LIMIT" in sql(query) and "OFFSET" in sql(query)
+    counted_query = count.get_final_froms()[0].element
+    assert counted_query.whereclause.compare(query.whereclause)
+    assert "ORDER BY" not in sql(count)
+    assert query.get_execution_options()["populate_existing"]
+    assert len(query._with_options) == 2
 
 
 async def test_empty_page_preserves_zero_total(rules_session, user):
     rules_session.scalar.return_value = 0
     result = await ReceiptRulesRepository(rules_session).list_all(
-        ReceiptRulesFilter(offset=0), user_id=user.id
+        page_filter=ReceiptRulesFilter(offset=0), user_id=user.id
     )
     assert result.items == []
     assert result.meta.total == 0
@@ -267,7 +372,7 @@ async def test_save_swaps_fields_in_two_flushes_without_intermediate_commit(
 
     rules_session.flush.side_effect = flush
     async with repo.transaction():
-        await repo.save(
+        await repo.save_profile(
             profile, fields=build_reconciliation_plan(entries, [first.id, second.id])
         )
         rules_session.commit.assert_not_awaited()
@@ -303,9 +408,9 @@ async def test_save_replaces_removed_field_reconciles_identification_and_updates
         ],
         [identification.id, removed.id],
     )
-    with patch(f"{MODULE}.inspect", return_value=MagicMock(persistent=True)):
+    with patch(f"{MODULE}.object_state", return_value=MagicMock(persistent=True)):
         async with repo.transaction():
-            await repo.save(
+            await repo.save_profile(
                 profile, fields=field_plan, identification=identification_plan
             )
     assert first.deleted_at is not None and not first.is_active
@@ -324,7 +429,7 @@ async def test_save_empty_collections_and_delete_preserve_historical_timestamps(
     repo = ReceiptRulesRepository(rules_session)
     field = profile.field_rules[0]
     async with repo.transaction():
-        await repo.save(
+        await repo.save_profile(
             profile,
             fields=build_reconciliation_plan([], [field.id]),
             identification=build_reconciliation_plan(
@@ -335,7 +440,7 @@ async def test_save_empty_collections_and_delete_preserve_historical_timestamps(
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with patch(f"{MODULE}.utcnow", return_value=now):
         async with repo.transaction():
-            await repo.delete(profile)
+            await repo.delete_profile(profile)
     assert profile.deleted_at == now
     assert not profile.is_active
     assert field.deleted_at == original_deleted
@@ -346,7 +451,7 @@ async def test_delete_deactivates_root_and_live_children_with_same_timestamp(
     rules_session, profile
 ):
     async with ReceiptRulesRepository(rules_session).transaction():
-        await ReceiptRulesRepository(rules_session).delete(profile)
+        await ReceiptRulesRepository(rules_session).delete_profile(profile)
     assert all(
         not item.is_active
         and item.deleted_at == profile.deleted_at
@@ -372,7 +477,7 @@ async def test_save_reconciles_first_field_on_profile_without_existing_fields(
     )
     repo = ReceiptRulesRepository(rules_session)
     async with repo.transaction():
-        await repo.save(profile, fields=build_reconciliation_plan([entry], []))
+        await repo.save_profile(profile, fields=build_reconciliation_plan([entry], []))
     assert len(profile.field_rules) == 1
     assert profile.field_rules[0].field_name == "category"
     assert profile.field_rules[0].profile_id == profile.id
@@ -389,6 +494,7 @@ async def test_find_by_name_without_excluded_id_keeps_owner_and_live_filters(
     statement = sql(query)
     assert "id !=" not in statement
     assert "deleted_at IS NULL" in statement
+    assert "OR" not in statement
     assert user.id in query.compile().params.values()
     assert "Bank" in query.compile().params.values()
 
@@ -403,7 +509,7 @@ async def test_save_identification_only_preserves_existing_field_rules(
     )
     repo = ReceiptRulesRepository(rules_session)
     async with repo.transaction():
-        await repo.save(
+        await repo.save_profile(
             profile,
             identification=build_reconciliation_plan([entry], [entry.id]),
         )
@@ -412,3 +518,87 @@ async def test_save_identification_only_preserves_existing_field_rules(
     assert profile.field_rules[0].deleted_at is None
     assert profile.identification_rules[0].pattern == "UPDATED"
     assert profile.identification_rules[0].weight == 10
+
+
+@pytest.mark.integration
+async def test_profile_contracts_preserve_seed_ownership_reconciliation_and_soft_delete(
+    rules_postgres_session,
+):
+    session = rules_postgres_session
+    role = Role(name="Rules test", name_code="rules_test", description="Rules test")
+    users = [
+        User(
+            role_id=role.id,
+            name=f"Rules user {index}",
+            email=f"rules-{index}@example.test",
+            username=f"rules-{index}",
+            date_of_birth=datetime(1990, 1, 1, tzinfo=timezone.utc),
+        )
+        for index in range(2)
+    ]
+    session.add_all([role, *users])
+    await session.commit()
+    owner, other = users
+    repo = ReceiptRulesRepository(session)
+    service = ReceiptRulesService(repo)
+    assert (await service.seed_defaults(owner)).created == 4
+    assert (await service.seed_defaults(other)).created == 3
+    assert (await service.seed_defaults(owner)).created == 0
+
+    created = await service.create_profile(
+        owner,
+        ReceiptRulesCreateSchema(
+            name="Custom",
+            institution_code="CUSTOM",
+            field_rules=[
+                {"field_name": "payer", "configuration": {"strategy": "not_found"}}
+            ],
+        ),
+    )
+    base: BaseRepository[ReceiptInterpretationProfile] = repo
+    page = await base.list_all(
+        user_id=owner.id, page_filter=FilterPage(offset=0, limit=2)
+    )
+    assert page.meta.total == 5 and len(page.items) == 2
+    assert all(item.user_id in (None, owner.id) for item in page.items)
+    foreign = await repo.find_by_code(user_id=other.id, institution_code="NUBANK")
+    assert foreign is not None
+    assert await base.find_by(user_id=owner.id, filters={"id": foreign.id}) is None
+
+    await service.update_profile(
+        created.id,
+        ReceiptRulesUpdateSchema(
+            field_rules=[
+                {
+                    "id": created.field_rules[0].id,
+                    "field_name": "beneficiary",
+                    "configuration": {"strategy": "not_found"},
+                },
+                {"field_name": "payer", "configuration": {"strategy": "not_found"}},
+            ],
+        ),
+        owner,
+    )
+    updated = await service.find_profile(created.id, owner)
+    assert {rule.field_name for rule in updated.field_rules} == {
+        "payer",
+        "beneficiary",
+    }
+    assert created.field_rules[0].id in {rule.id for rule in updated.field_rules}
+    await service.delete_profile(created.id, owner)
+    assert await base.find_by(user_id=owner.id, filters={"id": created.id}) is None
+    archived = await session.scalar(
+        select(ReceiptInterpretationProfile).where(
+            ReceiptInterpretationProfile.id == created.id
+        )
+    )
+    assert archived is not None and archived.deleted_at is not None
+    assert all(
+        rule.deleted_at == archived.deleted_at and not rule.is_active
+        for rule in archived.field_rules
+    )
+    shared = await repo.find_by_code(user_id=None, institution_code=None)
+    assert shared is not None
+    with pytest.raises(HTTPException) as caught:
+        await service.delete_profile(shared.id, owner)
+    assert caught.value.status_code == 403

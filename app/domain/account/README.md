@@ -23,8 +23,8 @@ número e metadados visuais); não realiza movimentações, conciliação ou cá
 |---|---|
 | `route.py` | Endpoints protegidos em `/accounts` e parâmetros de listagem |
 | `schema.py` | Contratos Pydantic de criação, atualização e resposta |
-| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização e unicidade de nome |
-| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository`; busca de duplicidade por nome |
+| `service.py` | Herda CRUD de `app.core.BaseService`; especializa normalização e unicidade de nome |
+| `repository.py` | Herda consultas, ownership e persistência de `app.core.BaseRepository`; busca de duplicidade por nome |
 | `../../models/account/account.py` | Modelo SQLAlchemy da tabela `accounts` |
 | `../../models/account/enums.py` | Tipos aceitos por `AccountTypeEnum` |
 

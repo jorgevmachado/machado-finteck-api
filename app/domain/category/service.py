@@ -23,7 +23,7 @@ from app.domain.category.schema import (
 )
 from app.models import Category, Subcategory, User
 from app.shared.schemas import Message
-from app.temp.service import BaseService
+from app.core.service.base import BaseService
 
 logger = logging.getLogger(__name__)
 

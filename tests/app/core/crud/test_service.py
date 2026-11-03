@@ -7,11 +7,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.exceptions import handle_service_exception
-from app.models import utcnow
 from app.shared.schemas import FilterPage, Message
 from app.shared.utils.string import to_snake_case
-from app.temp import BaseService
-from tests.app.temp.conftest import (
+from app.core.service import BaseService
+from tests.app.core.crud.conftest import (
     Item,
     ItemCreate,
     ItemRepository,
@@ -57,6 +56,49 @@ async def test_inherited_crud_cycle(service, user):
     assert await service.list_all(None, user) == []
 
 
+async def test_count_and_find_one_preserve_owner_and_logging(service, records, user):
+    with patch("app.core.service.base.log_service_success") as success:
+        assert await service.count(user=user) == 2
+        assert await service.count(user=user, filters={"child_label": "matching"}) == 1
+        assert await service.find_one(str(records[0].id), user) is records[0]
+    assert [call.kwargs["operation"] for call in success.call_args_list] == [
+        "count",
+        "count",
+        "find_one",
+    ]
+    assert success.call_args.kwargs["logger"].extra["target_id"] == str(records[0].id)
+    assert await service.count(user=user, filters={"id": records[2].id}) == 0
+    for identifier in (records[2].id, uuid4()):
+        with pytest.raises(HTTPException) as caught:
+            await service.find_one(identifier, user)
+        assert caught.value.status_code == 404
+        assert caught.value.detail == "Item not found"
+
+
+@pytest.mark.parametrize("operation", ["count", "find_one"])
+async def test_new_reads_translate_failure_without_success(service, user, operation):
+    method = "count" if operation == "count" else "find_by"
+    with (
+        patch.object(
+            service.repository, method, new=AsyncMock(side_effect=RuntimeError("db"))
+        ),
+        patch("app.core.service.base.log_service_success") as success,
+        patch(
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
+        ) as error,
+        pytest.raises(HTTPException) as caught,
+    ):
+        if operation == "count":
+            await service.count(user=user)
+        else:
+            await service.find_one(uuid4(), user)
+    assert caught.value.status_code == 500
+    success.assert_not_called()
+    error.assert_called_once()
+    assert error.call_args.kwargs["operation"] == operation
+
+
 @pytest.mark.parametrize("operation", ["find", "update", "delete"])
 async def test_foreign_missing_and_deleted_entities_are_not_accessible(
     service, records, user, operation
@@ -88,9 +130,10 @@ async def test_optional_lookup_returns_none_only_for_real_absence(service, user)
 async def test_specialized_operation_uses_context_once(service, user, fail):
     target = uuid4()
     with (
-        patch("app.temp.service.log_service_success") as success,
+        patch("app.core.service.base.log_service_success") as success,
         patch(
-            "app.temp.service.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
     ):
         if fail:
@@ -157,9 +200,10 @@ async def test_failures_translate_once_without_false_success(
         patch.object(
             target, failure, new=AsyncMock(side_effect=RuntimeError("failure"))
         ),
-        patch("app.temp.service.log_service_success") as success,
+        patch("app.core.service.base.log_service_success") as success,
         patch(
-            "app.temp.service.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
         pytest.raises(HTTPException) as caught,
     ):
@@ -200,7 +244,7 @@ async def test_success_only_after_commit(service, user):
     with (
         patch.object(session, "commit", side_effect=commit),
         patch(
-            "app.temp.service.log_service_success",
+            "app.core.service.base.log_service_success",
             side_effect=lambda *a, **kw: events.append("success"),
         ),
     ):
@@ -257,11 +301,7 @@ async def test_normalized_extension_uses_inherited_flows(
 
 
 class LogicalItemRepository(ItemRepository):
-    def _visibility(self):
-        return (Item.deleted_at.is_(None),)
-
-    async def _delete(self, entity):
-        entity.deleted_at = utcnow()
+    soft_delete = True
 
 
 async def test_logical_deletion_extension_keeps_row_and_hides_it(
@@ -272,8 +312,16 @@ async def test_logical_deletion_extension_keeps_row_and_hides_it(
     )
     entity = await service.create(user, ItemCreate(name="Logical"))
     identifier = entity.id
+    assert await service.count(user=user) == 1
     await service.delete(user, identifier)
+    assert await service.count(user=user) == 0
     assert await service.list_all(None, user) == []
+    page = await service.list_all(FilterPage.build(limit=1, offset=0), user)
+    assert page.items == []
+    assert page.meta.total == 0
+    with pytest.raises(HTTPException) as hidden:
+        await service.find_one(identifier, user)
+    assert hidden.value.status_code == 404
     assert (
         await service.find_by(user=user, filters={"id": identifier}, required=False)
         is None
@@ -286,6 +334,28 @@ async def test_logical_deletion_extension_keeps_row_and_hides_it(
         await service.delete(user, identifier)
     assert repeated.value.status_code == 404
     assert (await session.get(Item, identifier)).deleted_at == deleted_at
+
+
+async def test_opt_in_logical_deletion_rolls_back_on_commit_failure(
+    session, logging_params, user
+):
+    service = ItemService(
+        LogicalItemRepository(session), alias="Item", logger_params=logging_params
+    )
+    entity = await service.create(user, ItemCreate(name="Rollback"))
+    identifier = entity.id
+    with (
+        patch.object(session, "commit", side_effect=RuntimeError("commit")),
+        patch("app.core.service.base.log_service_success") as success,
+        pytest.raises(HTTPException) as caught,
+    ):
+        await service.delete(user, identifier)
+    assert caught.value.status_code == 500
+    success.assert_not_called()
+    await session.refresh(entity)
+    assert entity.deleted_at is None
+    assert await service.find_one(identifier, user) is entity
+    assert await service.count(user=user) == 1
 
 
 async def test_service_rejects_invalid_cache_namespace(repository, logging_params):
@@ -349,7 +419,7 @@ async def test_translation_hook_rewrites_exception_before_handling(service, user
             side_effect=ValueError("conflict"),
         ),
         patch(
-            "app.temp.service.handle_service_exception",
+            "app.core.service.base.handle_service_exception",
             wraps=handle_service_exception,
         ) as handler,
         pytest.raises(HTTPException) as caught,

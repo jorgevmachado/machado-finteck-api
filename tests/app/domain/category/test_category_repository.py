@@ -31,7 +31,7 @@ def repository_session(*, active_transaction: bool = False):
 
 def owned_transaction_session():
     session = repository_session()
-    session.info["app.temp.transaction_active"] = True
+    session.info["app.core.transaction_active"] = True
     return session
 
 

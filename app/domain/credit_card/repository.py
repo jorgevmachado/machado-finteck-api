@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.models import CreditCard
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 
 class CreditCardRepository(BaseRepository[CreditCard]):

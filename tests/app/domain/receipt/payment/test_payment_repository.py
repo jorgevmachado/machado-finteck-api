@@ -1,11 +1,12 @@
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, MagicMock, Mock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.receipt.payment.repository import PaymentRepository
 from app.shared.schemas import FilterPage
@@ -18,8 +19,10 @@ def session():
     rows = Mock()
     rows.all.return_value = []
     rows.first.return_value = None
+    rows.unique.return_value = rows
     return SimpleNamespace(
         scalars=AsyncMock(return_value=rows),
+        scalar=AsyncMock(return_value=0),
         execute=AsyncMock(),
     )
 
@@ -46,29 +49,84 @@ def assert_owner_and_dates(query, user_id, start_date=None, end_date=None):
         assert end_date in compiled.params.values()
 
 
-async def test_delete_removes_payment_then_commits(payment):
-    session = AsyncMock()
+def mutation_session(payment):
+    session = MagicMock(spec=AsyncSession)
+    session.begin = AsyncMock()
+    session.info = {}
+    session.in_transaction.return_value = False
+    session.in_nested_transaction.return_value = False
+    session.scalar.return_value = payment.user_id
+    return session
 
-    await PaymentRepository(session).delete(payment)
+
+async def test_delete_removes_payment_and_transaction_commits(payment):
+    session = mutation_session(payment)
+    repository = PaymentRepository(session)
+    async with repository.transaction():
+        await repository.delete(payment, user_id=payment.user_id)
+        session.commit.assert_not_awaited()
 
     session.delete.assert_awaited_once_with(payment)
+    session.flush.assert_awaited_once()
     session.commit.assert_awaited_once_with()
-    assert session.mock_calls == [call.delete(payment), call.commit()]
 
 
 @pytest.mark.parametrize("failed_method", ["delete", "commit"])
 async def test_delete_propagates_database_errors(payment, failed_method):
-    session = AsyncMock()
+    session = mutation_session(payment)
     getattr(session, failed_method).side_effect = RuntimeError("database failure")
 
     with pytest.raises(RuntimeError, match="database failure"):
-        await PaymentRepository(session).delete(payment)
+        repository = PaymentRepository(session)
+        async with repository.transaction():
+            await repository.delete(payment, user_id=payment.user_id)
 
+    session.rollback.assert_awaited_once()
     session.delete.assert_awaited_once_with(payment)
     if failed_method == "delete":
         session.commit.assert_not_awaited()
     else:
         session.commit.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize("method", ["save", "delete"])
+async def test_mutations_require_transaction_and_trusted_owner(payment, method):
+    session = mutation_session(payment)
+    repository = PaymentRepository(session)
+    with pytest.raises(RuntimeError, match="transaction"):
+        await getattr(repository, method)(payment, user_id=payment.user_id)
+    with pytest.raises(ValueError, match="owner"):
+        async with repository.transaction():
+            await getattr(repository, method)(payment, user_id=uuid4())
+    session.add.assert_not_called()
+    session.delete.assert_not_awaited()
+
+
+async def test_save_flushes_and_refreshes_before_transaction_commit(payment):
+    session = mutation_session(payment)
+    repository = PaymentRepository(session)
+    async with repository.transaction():
+        result = await repository.save(payment, user_id=payment.user_id)
+        session.commit.assert_not_awaited()
+    assert result is payment
+    session.add.assert_called_once_with(payment)
+    session.flush.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(payment)
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("field", ["id", "receipt_id"])
+async def test_find_by_uses_base_lookup_and_trusted_owner(
+    repository, session, user, payment, field
+):
+    session.scalars.return_value.one_or_none.return_value = payment
+    filters = {field: str(getattr(payment, field))}
+    result = await repository.find_by(user_id=user.id, filters=filters)
+    assert result is payment
+    query = session.scalars.await_args.args[0]
+    assert_owner_and_dates(query, user.id)
+    assert getattr(payment, field) in compile_query(query).params.values()
+    assert filters == {field: str(getattr(payment, field))}
 
 
 @pytest.mark.parametrize("page_filter", [None, FilterPage()])
@@ -201,16 +259,44 @@ async def test_list_applies_inclusive_date_bounds(repository, session, user, bou
 async def test_list_delegates_pagination_with_filtered_ordered_query(
     repository, session, user, page_filter
 ):
-    repository.list_paginate = AsyncMock()
+    repository._list_paginate = AsyncMock()
 
     result = await repository.list(user.id, page_filter)
 
-    assert result is repository.list_paginate.return_value
-    repository.list_paginate.assert_awaited_once()
-    query, actual_filter = repository.list_paginate.await_args.args
+    assert result is repository._list_paginate.return_value
+    repository._list_paginate.assert_awaited_once()
+    query = repository._list_paginate.await_args.args[0]
+    actual_filter = repository._list_paginate.await_args.kwargs["page_filter"]
     assert actual_filter is page_filter
     assert_owner_and_dates(query, user.id)
     session.scalars.assert_not_awaited()
+
+
+async def test_list_pagination_counts_same_owner_and_relationship_filters(
+    repository, session, user, payment
+):
+    session.scalar.return_value = 3
+    session.scalars.return_value.all.return_value = [payment]
+    page_filter = FilterPage.build(
+        payer="Electric Company",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31),
+        order_by="amount",
+        order="asc",
+        limit=1,
+        offset=1,
+    )
+    result = await repository.list(user.id, page_filter)
+    assert result.items == [payment]
+    assert result.meta.total == 3 and result.meta.offset == 1
+    count_query = session.scalar.await_args.args[0]
+    item_query = session.scalars.await_args.args[0]
+    counted = count_query.get_final_froms()[0].element
+    assert counted.whereclause.compare(item_query.whereclause)
+    assert counted.get_final_froms()[0].compare(item_query.get_final_froms()[0])
+    assert "ORDER BY" not in str(compile_query(count_query))
+    assert "LIMIT" in str(compile_query(item_query))
+    assert "electric_company" in compile_query(count_query).params.values()
 
 
 @pytest.mark.parametrize(

@@ -1,23 +1,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from http import HTTPStatus
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.exceptions import handle_service_exception
-from app.core.logging import LoggingParams, log_service_success
-
-from app.core.cache.service import CacheService
+from app.core.logging import LoggingParams
 from app.core.pagination import CustomLimitOffsetPage
-from app.domain.account.schema import (
-    AccountSchema,
-)
 from app.domain.receipt.rules.business import (
     ProfileReconciliationError,
     build_reconciliation_plan,
@@ -42,31 +32,35 @@ from app.models import (
     ReceiptFieldRule,
     ReceiptIdentificationRule,
 )
-from app.shared.schemas import Message
+from app.shared.schemas import FilterPage, Message
+from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
 
 
-class ReceiptRulesService:
+class ReceiptRulesService(
+    BaseService[
+        ReceiptInterpretationProfile,
+        ReceiptRulesCreateSchema,
+        ReceiptRulesUpdateSchema,
+        ReceiptRulesSchema,
+    ]
+):
+    repository_class = ReceiptRulesRepository
+    repository: ReceiptRulesRepository
+
     def __init__(self, repository: ReceiptRulesRepository) -> None:
-        self.alias = "ReceiptInterpretationProfile"
-        self.repository = repository
-        self.logger_params = LoggingParams(
-            logger=logger, service="ReceiptRulesService", operation="rules"
-        )
-        self.cache_service = CacheService(
-            alias=self.alias,
-            prefix="rules",
-            logger_params=self.logger_params,
-            schema_class=AccountSchema,
+        super().__init__(
+            repository,
+            alias="ReceiptInterpretationProfile",
+            logger_params=LoggingParams(
+                logger=logger, service="ReceiptRulesService", operation="rules"
+            ),
+            schema_class=ReceiptRulesSchema,
+            cache_prefix="rules",
         )
 
-    @classmethod
-    def from_session(cls, session: AsyncSession) -> ReceiptRulesService:
-        return cls(ReceiptRulesRepository(session))
-
-    @staticmethod
-    def _translate_error(exception: Exception) -> Exception:
+    def _translate_exception(self, exception: Exception) -> Exception:
         if isinstance(exception, ProfileReconciliationError):
             return HTTPException(HTTPStatus.UNPROCESSABLE_CONTENT, str(exception))
         if not isinstance(exception, IntegrityError):
@@ -101,33 +95,7 @@ class ReceiptRulesService:
             raise HTTPException(HTTPStatus.FORBIDDEN, "System profile is read-only")
         return entity
 
-    @asynccontextmanager
-    async def _operation(
-        self, operation: str, user_request: str, target_id: UUID | None = None
-    ) -> AsyncIterator[None]:
-        try:
-            yield
-        except Exception as exception:
-            handle_service_exception(
-                self._translate_error(exception),
-                logger=logger,
-                service=self.logger_params.service,
-                operation=operation,
-                user_request=user_request,
-                raise_exception=True,
-            )
-        else:
-            log_service_success(
-                self.logger_params,
-                operation=operation,
-                message=(
-                    f"Receipt interpretation profile {operation} "
-                    f"successfully: {target_id}"
-                ),
-                user_request=user_request,
-            )
-
-    async def create(
+    async def create_profile(
         self, user: User, payload: ReceiptRulesCreateSchema
     ) -> ReceiptRulesSchema:
         user_id, username = user.id, user.username
@@ -141,9 +109,16 @@ class ReceiptRulesService:
                     raise HTTPException(
                         HTTPStatus.CONFLICT, "Institution profile already exists"
                     )
-                await self.repository.save(entity)
+                await self.repository.save_profile(entity)
                 result = ReceiptRulesSchema.model_validate(entity)
             return result
+
+    def _build_entity(
+        self, user_id: UUID, data: dict[str, object]
+    ) -> ReceiptInterpretationProfile:
+        return self._build_aggregate(
+            user_id, ReceiptRulesCreateSchema.model_validate(data)
+        )
 
     @staticmethod
     def _build_aggregate(
@@ -156,39 +131,35 @@ class ReceiptRulesService:
             institution_code=payload.institution_code,
             is_active=payload.is_active,
         )
-        entity.field_rules.extend(
+        entity.field_rules = [
             ReceiptFieldRule(profile_id=entity.id, **child.model_dump(mode="json"))
             for child in payload.field_rules
-        )
-        entity.identification_rules.extend(
+        ]
+        entity.identification_rules = [
             ReceiptIdentificationRule(
                 profile_id=entity.id, **child.model_dump(mode="json")
             )
             for child in payload.identification_rules
-        )
+        ]
         return entity
 
-    async def list_all(
-        self, page_filter, user: User
+    async def list_profiles(
+        self, page_filter: FilterPage | None, user: User
     ) -> list[ReceiptRulesSchema] | CustomLimitOffsetPage[ReceiptRulesSchema]:
         user_id, username = user.id, user.username
         async with self._operation("list_all", username, user_id):
-            entities = await self.repository.list_all(page_filter, user_id=user_id)
-            if isinstance(entities, CustomLimitOffsetPage):
-                return CustomLimitOffsetPage[ReceiptRulesSchema](
-                    **entities.model_dump(exclude={"items"}),
-                    items=[
-                        ReceiptRulesSchema.model_validate(entity)
-                        for entity in entities.items
-                    ],
-                )
-            return [ReceiptRulesSchema.model_validate(entity) for entity in entities]
+            entities = await self.repository.list_all(
+                page_filter=page_filter, user_id=user_id
+            )
+            return self._schema_list(entities)
 
-    async def find_by(self, profile_id: UUID, user: User) -> ReceiptRulesSchema:
+    async def find_profile(self, profile_id: UUID, user: User) -> ReceiptRulesSchema:
         user_id, username = user.id, user.username
         async with self._operation("find_by", username, profile_id):
             entity = self._check_entity(
-                await self.repository.find_by(id=profile_id, user_id=user_id)
+                await self.repository.find_by(
+                    filters={"id": profile_id}, user_id=user_id
+                )
             )
             return ReceiptRulesSchema.model_validate(entity)
 
@@ -198,7 +169,9 @@ class ReceiptRulesService:
         user_id, username = user.id, user.username
         async with self._operation("extract_source_institution", username, profile_id):
             entity = self._check_entity(
-                await self.repository.find_by(id=profile_id, user_id=user_id)
+                await self.repository.find_by(
+                    filters={"id": profile_id}, user_id=user_id
+                )
             )
             if not entity.is_active:
                 return SourceExtractionResult(status="not_found")
@@ -223,7 +196,7 @@ class ReceiptRulesService:
             )
             return await extract_source(payload, text, identified=identified)
 
-    async def update(
+    async def update_profile(
         self,
         profile_id: UUID,
         payload: ReceiptRulesUpdateSchema,
@@ -234,7 +207,7 @@ class ReceiptRulesService:
             async with self.repository.transaction():
                 entity = self._check_entity(
                     await self.repository.find_by(
-                        id=profile_id, user_id=user_id, for_update=True
+                        filters={"id": profile_id}, user_id=user_id, for_update=True
                     ),
                     writable=True,
                 )
@@ -263,22 +236,22 @@ class ReceiptRulesService:
                     exclude={"field_rules", "identification_rules"},
                 ).items():
                     setattr(entity, key, value)
-                await self.repository.save(
+                await self.repository.save_profile(
                     entity, fields=fields, identification=identification
                 )
             return Message(message=f"Update receipt profile {profile_id} successfully")
 
-    async def delete(self, profile_id: UUID, user: User) -> Message:
+    async def delete_profile(self, profile_id: UUID, user: User) -> Message:
         user_id, username = user.id, user.username
         async with self._operation("delete", username, profile_id):
             async with self.repository.transaction():
                 entity = self._check_entity(
                     await self.repository.find_by(
-                        id=profile_id, user_id=user_id, for_update=True
+                        filters={"id": profile_id}, user_id=user_id, for_update=True
                     ),
                     writable=True,
                 )
-                await self.repository.delete(entity)
+                await self.repository.delete_profile(entity)
             return Message(message=f"Delete receipt profile {profile_id} successfully")
 
     async def seed_defaults(self, user: User) -> ReceiptRulesSeedSchema:
@@ -297,7 +270,9 @@ class ReceiptRulesService:
                     if existing is not None:
                         skipped += 1
                         continue
-                    await self.repository.save(self._build_aggregate(owner_id, payload))
+                    await self.repository.save_profile(
+                        self._build_aggregate(owner_id, payload)
+                    )
                     created += 1
                 result = ReceiptRulesSeedSchema(created=created, skipped=skipped)
             return result

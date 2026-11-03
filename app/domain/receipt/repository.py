@@ -1,10 +1,15 @@
-from app.core.repository.base import BaseRepository
+from app.core.repository import BaseRepository
 from app.models import Receipt
 
 
 class ReceiptRepository(BaseRepository[Receipt]):
     model = Receipt
-
-    async def delete(self, entity: Receipt) -> None:
-        await self.session.delete(entity)
-        await self.session.commit()
+    filter_fields = ("id", "file_hash", "status", "file_name", "file_type", "file_size")
+    order_fields = (
+        "id",
+        "created_at",
+        "received_at",
+        "file_name",
+        "file_size",
+        "status",
+    )

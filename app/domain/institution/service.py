@@ -15,7 +15,7 @@ from app.domain.institution.schema import (
 )
 from app.models import Institution, User
 from app.shared.utils.string import to_snake_case
-from app.temp import BaseService
+from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
 

@@ -14,7 +14,7 @@ from app.domain.account.schema import (
     AccountUpdateSchema,
 )
 from app.models import Account, AccountTypeEnum, User
-from app.temp import BaseService
+from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
 

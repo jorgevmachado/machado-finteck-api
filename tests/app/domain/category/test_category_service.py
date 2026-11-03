@@ -15,7 +15,7 @@ from app.domain.category.schema import CategoryCreateSchema, CategoryUpdateSchem
 from app.domain.category.service import CategoryService
 from app.models import Category, Subcategory, utcnow
 from app.shared.schemas import FilterPage, Message
-from app.temp.service import BaseService
+from app.core.service.base import BaseService
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def repository(transaction_state):
 
 @pytest.fixture
 def success_log():
-    with patch("app.temp.service.log_service_success") as log:
+    with patch("app.core.service.base.log_service_success") as log:
         yield log
 
 
@@ -197,7 +197,7 @@ class TestCategoryServiceFindSubcategory:
 
         with (
             patch(
-                "app.temp.service.handle_service_exception",
+                "app.core.service.base.handle_service_exception",
                 wraps=handle_service_exception,
             ) as error,
             pytest.raises(HTTPException) as caught,
@@ -702,7 +702,7 @@ class TestCategoryServiceErrors:
         error = handle_service_exception
 
         with patch(
-            "app.temp.service.handle_service_exception",
+            "app.core.service.base.handle_service_exception",
             wraps=error,
         ) as handler:
             with pytest.raises(HTTPException) as exc:
@@ -772,7 +772,7 @@ class TestCategoryServiceErrors:
             call = service.delete(user, category_entity.id)
 
         with patch(
-            "app.temp.service.handle_service_exception",
+            "app.core.service.base.handle_service_exception",
             wraps=handle_service_exception,
         ) as handler:
             with pytest.raises(HTTPException) as exc:

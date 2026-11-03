@@ -14,7 +14,7 @@ from app.domain.credit_card.schema import (
     CreditCardUpdateSchema,
 )
 from app.models import CreditCard, CreditCardBrandEnum, User
-from app.temp import BaseService
+from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
 

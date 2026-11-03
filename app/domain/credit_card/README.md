@@ -23,8 +23,8 @@ processamento de pagamentos, geração de faturas ou cálculo de limite disponí
 |---|---|
 | `route.py` | Endpoints protegidos em `/credit-cards` e parâmetros de listagem |
 | `schema.py` | Contratos Pydantic de criação, atualização e resposta |
-| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização e unicidade de nome |
-| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository`; busca de duplicidade por nome |
+| `service.py` | Herda CRUD de `app.core.BaseService`; especializa normalização e unicidade de nome |
+| `repository.py` | Herda consultas, ownership e persistência de `app.core.BaseRepository`; busca de duplicidade por nome |
 | `../../models/credit_card/credit_card.py` | Modelo SQLAlchemy da tabela `credit_cards` |
 | `../../models/credit_card/enums.py` | Bandeiras aceitas por `CreditCardBrandEnum` |
 

@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.models import Account
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 
 class AccountRepository(BaseRepository[Account]):

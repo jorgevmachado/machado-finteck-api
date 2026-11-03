@@ -13,7 +13,7 @@ from app.core.pagination.pagination import get_limit_offset_params
 from app.domain.category.business import SubcategoryReconciliationPlan
 from app.models import Category, Subcategory, utcnow
 from app.shared.schemas import FilterPage
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 

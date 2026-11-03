@@ -16,7 +16,7 @@ from app.domain.beneficiary.schema import (
 from app.domain.beneficiary.service import BeneficiaryService
 from app.models import Beneficiary
 from app.shared.schemas import FilterPage, Message
-from app.temp import BaseService
+from app.core.service import BaseService
 
 pytestmark = pytest.mark.asyncio
 
@@ -99,7 +99,7 @@ async def test_ownership_applies_to_queries_mutations_and_uniqueness(service, us
 async def test_resolve_reuses_owner_record_or_creates_once(
     service, user, beneficiary_session
 ):
-    with patch("app.temp.service.log_service_success") as success:
+    with patch("app.core.service.base.log_service_success") as success:
         first = await service.resolve(user, "  Electric Company  ")
         second = await service.resolve(user, "electric company")
     assert first.id == second.id
@@ -122,9 +122,9 @@ async def test_resolve_translates_once_and_rolls_back(service, user, failure):
             target, failure, new=AsyncMock(side_effect=RuntimeError("database failure"))
         ),
         patch(
-            "app.temp.service.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception", wraps=handle_service_exception
         ) as error,
-        patch("app.temp.service.log_service_success") as success,
+        patch("app.core.service.base.log_service_success") as success,
         pytest.raises(HTTPException) as caught,
     ):
         await service.resolve(user, "New")

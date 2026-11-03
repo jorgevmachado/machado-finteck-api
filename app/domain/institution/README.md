@@ -31,8 +31,8 @@ Usuários diferentes podem cadastrar instituições com o mesmo nome.
 |---|---|
 | `route.py` | Endpoints protegidos em `/institutions` |
 | `schema.py` | Validação dos dados de entrada e saída |
-| `service.py` | Herda CRUD de `app.temp.BaseService`; especializa normalização e unicidade |
-| `repository.py` | Herda consultas, ownership e persistência de `app.temp.BaseRepository` |
+| `service.py` | Herda CRUD de `app.core.BaseService`; especializa normalização e unicidade |
+| `repository.py` | Herda consultas, ownership e persistência de `app.core.BaseRepository` |
 | `app/models/institution/institution.py` | Modelo e restrição de unicidade no banco |
 
 ## Endpoints

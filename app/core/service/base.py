@@ -1,335 +1,334 @@
-from http import HTTPStatus
-from typing import Annotated, Any, cast
+from __future__ import annotations
 
-from fastapi import HTTPException, Query
-from pydantic import BaseModel
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from hashlib import sha256
+from http import HTTPStatus
+import json
+from logging import LoggerAdapter
+import re
+from typing import Any, Self, cast
+from uuid import UUID
+
+from fastapi import HTTPException
+from pydantic import BaseModel, TypeAdapter
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache.service import CacheService
 from app.core.exceptions import handle_service_exception
 from app.core.logging import LoggingParams, log_service_success
-from app.core.pagination.pagination import exception_pagination
-from app.models import utcnow
+from app.core.pagination import CustomLimitOffsetPage
+from app.models import User
 from app.shared.schemas import FilterPage, Message
-from app.shared.utils.string import is_valid_uuid, to_snake_case
+from app.core.repository.base import BaseRepository, OwnedEntity, RepositoryEntity
+
+_MANAGED_FIELDS = frozenset({"id", "user_id", "created_at", "updated_at", "deleted_at"})
+_CRITERIA = TypeAdapter(dict[str, object])
 
 
 class BaseService[
-    RepositoryT,
-    ModelT,
+    ModelT: OwnedEntity | RepositoryEntity[UUID | None],
+    CreateT: BaseModel = BaseModel,
+    UpdateT: BaseModel = BaseModel,
     SchemaT: BaseModel = BaseModel,
-    UpdateSchemaT: BaseModel = BaseModel,
-]:
+](ABC):
+    repository_class: type[BaseRepository[ModelT]] | None = None
+
+    @classmethod
+    def from_session(cls, session: AsyncSession, **kwargs: Any) -> Self:
+        if cls.repository_class is None:
+            raise TypeError(f"{cls.__name__} must declare repository_class")
+        return cls(cls.repository_class(session), **kwargs)
+
     def __init__(
         self,
+        repository: BaseRepository[ModelT],
+        *,
         alias: str,
-        repository: RepositoryT,
         logger_params: LoggingParams,
-        schema_class: type[SchemaT],
+        schema_class: type[SchemaT] | None = None,
         cache_prefix: str | None = None,
-        parents_alias: list[str] | None = None,
-    ):
-        prefix = cache_prefix or alias.replace(" ", "_").lower()
-        self.alias = alias
+        parents_alias: tuple[str, ...] = (),
+        default_ttl: int = 86400,
+    ) -> None:
         self.repository = repository
-        self.cache_prefix = cache_prefix
-        self.parents_alias = parents_alias
+        self.alias = alias
         self.logger_params = logger_params
-        self.cache_service = CacheService(
-            alias=alias,
-            prefix=prefix,
-            logger_params=logger_params,
-            schema_class=schema_class,
+        self.schema_class = schema_class
+        self.cache_prefix = cache_prefix or alias.replace(" ", "_").lower()
+        self.parents_alias = parents_alias
+        self.default_ttl = default_ttl
+        if schema_class is not None:
+            for resource in (self.cache_prefix, *parents_alias):
+                if re.fullmatch(r"[a-z0-9_-]+", resource) is None:
+                    raise ValueError(
+                        "Cache namespaces must use lowercase letters, digits, _ or -"
+                    )
+            if default_ttl <= 0:
+                raise ValueError("Cache TTL must be positive")
+
+    def _translate_exception(self, exception: Exception) -> Exception:
+        return exception
+
+    @asynccontextmanager
+    async def _operation(
+        self, operation: str, user_request: str, target_id: UUID | str | None = None
+    ) -> AsyncIterator[None]:
+        logger = LoggerAdapter(
+            self.logger_params.logger,
+            {"target_id": str(target_id) if target_id else None},
+            merge_extra=True,
         )
+        try:
+            yield
+        except Exception as exception:
+            handle_service_exception(
+                self._translate_exception(exception),
+                logger=logger,
+                service=self.logger_params.service,
+                operation=operation,
+                user_request=user_request,
+                raise_exception=True,
+            )
+        else:
+            log_service_success(
+                self.logger_params,
+                logger=logger,
+                operation=operation,
+                message=f"{self.alias} {operation} successfully: {target_id}",
+                user_request=user_request,
+            )
 
     async def list_all(
-        self,
-        page_filter: Annotated[FilterPage, Query()] = None,
-        user_request: str | None = None,
-    ):
-        try:
-            return await self.repository.list_all(page_filter=page_filter)
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="list_all",
-                user_request=user_request,
-                raise_exception=False,
-            )
-            return exception_pagination(page_filter)
-        finally:
-            log_service_success(
-                self.logger_params,
-                operation="list_all",
-                message="List all successfully",
-                user_request=user_request,
+        self, page_filter: FilterPage | None, user: User
+    ) -> list[ModelT] | CustomLimitOffsetPage[ModelT]:
+        async with self._operation("list_all", user.username):
+            return await self.repository.list_all(
+                user_id=user.id, page_filter=page_filter
             )
 
-    async def list_all_cached(
-        self,
-        page_filter: Annotated[FilterPage, Query()] = None,
-        user_request: str | None = None,
-        **kwargs,
-    ):
-        clean_cache = page_filter.clean_cache if page_filter else False
-        if clean_cache:
-            await self.cache_service.delete_domain()
-        if page_filter:
-            page_filter.clean_cache = None
-        key = self.cache_service.build_key_list(page_filter=page_filter)
-        cached = await self.cache_service.get_list(key)
-        if cached:
-            return cached
-        result = await self.list_all(page_filter=page_filter, user_request=user_request)
+    async def count(
+        self, *, user: User, filters: Mapping[str, object] | None = None
+    ) -> int:
+        async with self._operation("count", user.username):
+            return await self.repository.count(user_id=user.id, filters=filters)
 
-        await self.cache_service.set_list(key, result)
+    async def find_one(self, identifier: UUID | str, /, user: User) -> ModelT:
+        async with self._operation("find_one", user.username, identifier):
+            return await self._get(identifier, user)
 
-        return result
-
-    async def find_one(
-        self,
-        param: str,
-        **kwargs,
-    ):
-        finance_id = kwargs.get("finance_id") if kwargs else None
-        user_request = kwargs.get("user_request") if kwargs else None
-        with_deleted = kwargs.get("with_deleted") if kwargs else False
-        reference_year = kwargs.get("reference_year") if kwargs else None
-        finance_id = cast(str, finance_id) if finance_id else None
-        reference_year = cast(int, reference_year) if reference_year else None
-        try:
-            find_by_filters: dict[str, str | int] = (
-                {"finance_id": finance_id} if finance_id else {}
-            )
-            if reference_year is not None:
-                find_by_filters["reference_year"] = reference_year
-
-            if is_valid_uuid(param):
-                result = await self.repository.find_by(
-                    id=param, with_deleted=with_deleted, **find_by_filters
-                )
-            else:
-                result = await self.repository.find_by(
-                    name=param, with_deleted=with_deleted, **find_by_filters
-                )
-
-            if result is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail=f"{self.alias} not found",
-                )
-            return result
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="find_one",
-                user_request=user_request,
-                raise_exception=True,
-            )
-        finally:
-            log_service_success(
-                self.logger_params,
-                operation="find_one",
-                message=f"Find one {self.alias} successfully",
-                user_request=user_request,
-            )
-
-    async def _invalidate_cache(
-        self, identifier: str | None = None, finance_id: str | None = None
-    ) -> None:
-        try:
-            await self.cache_service.delete_with_parent_cache(self.parents_alias)
-            if identifier:
-                cache_key = identifier
-                if finance_id:
-                    cache_key = f"{finance_id}:{identifier}"
-                await self.cache_service.cache.delete_cache(cache_key)
-        except Exception:
-            self.logger_params.logger.warning(
-                "Cache invalidation skipped for %s due to an infrastructure error.",
-                self.alias,
-                exc_info=True,
-            )
-
-    async def find_one_cached(
-        self,
-        param: str,
-        **kwargs,
-    ):
-        cache_key = param
-        finance_id = kwargs.get("finance_id") if kwargs else None
-        finance_id = cast(str, finance_id) if finance_id else None
-        if finance_id:
-            cache_key = f"{finance_id}:{param}"
-
-        reference_year = kwargs.get("reference_year") if kwargs else None
-        reference_year = cast(int, reference_year) if reference_year else None
-        if reference_year:
-            cache_key = f"{cache_key}:{reference_year}"
-        key = self.cache_service.build_key_one(param=cache_key)
-        clean_cache = kwargs.get("clean_cache") if kwargs else False
-
-        if clean_cache:
-            await self.cache_service.cache.delete_cache(key)
-        cached = await self.cache_service.get_one(key)
-        if cached:
-            return cached
-        item = await self.find_one(param, **kwargs)
-        await self.cache_service.set_one(key, item)
-        return item
-
-    async def find_by(self, **kwargs):
-        user_request = kwargs.get("user_request", None)
-        without_throw = kwargs.get("without_throw", False)
-        kwargs.pop("without_throw", None)
-        try:
-            result = await self.repository.find_by(**kwargs)
-            if result is None and not without_throw:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail=f"{self.alias} not found",
-                )
-            return result
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="find_by",
-                user_request=user_request,
-            )
-        finally:
-            log_service_success(
-                self.logger_params,
-                operation="find_by",
-                message=f"Find by {self.alias} successfully",
-                user_request=user_request,
-            )
-
-    async def update(
-        self, param: str, update_schema: UpdateSchemaT, **kwargs
-    ) -> ModelT:
-        user_request = kwargs.get("user_request", None)
-        finance_id = kwargs.get("finance_id") if kwargs else None
-        finance_id = cast(str, finance_id) if finance_id else None
-        kwargs.pop("finance_id", None)
-        try:
-            entity = await self.find_one(param, user_request=user_request)
-            if entity is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail=f"{self.alias} not found",
-                )
-            update_data = update_schema.model_dump(exclude_unset=True)
-            self._sync_code_fields(update_schema, entity, update_data)
-            for key, value in update_data.items():
-                if isinstance(entity, dict):
-                    entity[key] = value
-                else:
-                    setattr(entity, key, value)
-            await self._invalidate_cache(identifier=param, finance_id=finance_id)
-            return await self.repository.update(entity)
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="update",
-                user_request=user_request,
-                raise_exception=True,
-            )
-        finally:
-            log_service_success(
-                self.logger_params,
-                operation="update",
-                message=f"Update {self.alias} successfully",
-                user_request=user_request,
-            )
+    def _schema(self) -> type[SchemaT]:
+        if self.schema_class is None:
+            raise RuntimeError("Cached reads require a configured response schema")
+        return self.schema_class
 
     @staticmethod
-    def _sync_code_fields(
-        update_schema: BaseModel,
-        entity: ModelT,
-        update_data: dict[str, Any],
+    def _cache_scope(resource: str, user_id: UUID) -> str:
+        return f"experimental:{resource}:{user_id}:"
+
+    def _cache(self, user_id: UUID) -> CacheService:
+        self.repository.require_owner(user_id)
+        return CacheService(
+            alias=self.alias,
+            prefix=self._cache_scope(self.cache_prefix, user_id),
+            logger_params=self.logger_params,
+            schema_class=self._schema(),
+            default_ttl=self.default_ttl,
+        )
+
+    @staticmethod
+    def _criteria_key(criteria: Mapping[str, object]) -> str:
+        normalized = _CRITERIA.dump_python(dict(criteria), mode="json")
+        canonical = json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        return sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _schema_list[ItemT](
+        self, result: list[ItemT] | CustomLimitOffsetPage[ItemT]
+    ) -> list[SchemaT] | CustomLimitOffsetPage[SchemaT]:
+        schema = self._schema()
+        if isinstance(result, list):
+            return [
+                schema.model_validate(item, from_attributes=True) for item in result
+            ]
+        return CustomLimitOffsetPage[schema](
+            items=[
+                schema.model_validate(item, from_attributes=True)
+                for item in result.items
+            ],
+            meta=result.meta,
+        )
+
+    async def list_all_cached(
+        self, page_filter: FilterPage | None, user: User
+    ) -> list[SchemaT] | CustomLimitOffsetPage[SchemaT]:
+        async with self._operation("list_all_cached", user.username):
+            filters, order_by = self.repository.prepare_list(
+                user_id=user.id, page_filter=page_filter
+            )
+            cache = self._cache(user.id)
+            clean = page_filter.clean_cache if page_filter else False
+            copied = (
+                page_filter.model_copy(update={"clean_cache": None})
+                if page_filter
+                else None
+            )
+            criteria = copied.model_dump(exclude_none=True) if copied else {}
+            criteria.update(filters, order_by=order_by)
+            key = cache.build_key_list(
+                FilterPage.build(query_digest=self._criteria_key(criteria))
+            )
+            if clean:
+                await cache.delete_domain()
+            cached = await cache.get_list(key)
+            if cached is not None:
+                if not isinstance(cached, (list, CustomLimitOffsetPage)):
+                    raise ValueError("Unexpected cached pagination envelope")
+                return self._schema_list(cached)
+            result = self._schema_list(
+                await self.repository.list_all(user_id=user.id, page_filter=copied)
+            )
+            await cache.set_list(key, result)
+            return result
+
+    async def find_one_cached(
+        self, *, user: User, filters: Mapping[str, object], clean_cache: bool = False
+    ) -> SchemaT:
+        async with self._operation("find_one_cached", user.username):
+            criteria = self.repository.prepare_lookup(user_id=user.id, filters=filters)
+            cache = self._cache(user.id)
+            key = cache.build_key_one(self._criteria_key(criteria))
+            if clean_cache:
+                await cache.delete_cache(cache_key=key)
+            cached = await cache.get_one(key)
+            if cached is not None:
+                return self._schema().model_validate(cached)
+            entity = await self._find(user_id=user.id, filters=criteria, required=True)
+            result = self._schema().model_validate(entity, from_attributes=True)
+            await cache.set_one(key, result)
+            return result
+
+    async def _invalidate_cache(
+        self, user: User, entity: ModelT, operation: str
     ) -> None:
-        schema_fields = getattr(type(update_schema), "model_fields", {})
-        field_pairs = (("name", "name_code"), ("source", "source_code"))
-
-        for source_field, code_field in field_pairs:
-            if code_field not in schema_fields or source_field not in update_data:
-                continue
-
-            updated_value = update_data[source_field]
-            if not isinstance(updated_value, str):
-                continue
-
-            current_value = (
-                entity.get(source_field)
-                if isinstance(entity, dict)
-                else getattr(entity, source_field, None)
-            )
-            if updated_value != current_value:
-                update_data[code_field] = to_snake_case(updated_value)
-
-    async def update_entity(
-        self,
-        entity: ModelT,
-        user_request: str | None = None,
-    ) -> ModelT:
+        if self.schema_class is None:
+            return
         try:
-            updated = await self.repository.update(entity=entity)
-            await self.cache_service.delete_with_parent_cache(self.parents_alias)
-            return updated
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="update",
-                user_request=user_request,
-                raise_exception=True,
-            )
-        finally:
-            log_service_success(
-                self.logger_params,
-                operation="update",
-                message=f"Update Entity {self.alias} successfully",
-                user_request=user_request,
+            cache = self._cache(user.id)
+            parents = [
+                self._cache_scope(parent, user.id) for parent in self.parents_alias
+            ]
+            await cache.delete_with_parent_cache(parents)
+        except Exception:
+            self.logger_params.logger.warning(
+                "Cache invalidation failed for %s after committed %s",
+                self.alias,
+                operation,
+                exc_info=True,
+                extra={
+                    "service": self.logger_params.service,
+                    "operation": operation,
+                    "user_request": user.username,
+                    "user_id": str(user.id),
+                    "target_id": str(entity.id),
+                },
             )
 
-    async def soft_delete(self, param: str, **kwargs) -> Message:
-        user_request = kwargs.get("user_request") if kwargs else None
-        finance_id = kwargs.get("finance_id") if kwargs else None
-        finance_id = cast(str, finance_id) if finance_id else None
-        kwargs.pop("finance_id", None)
-        successfully_message = f"Deleted {self.alias} successfully"
-        try:
-            entity = await self.find_one(param=param, finance_id=finance_id, **kwargs)
-            if entity is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail=f"{self.alias} not found",
+    async def _find(
+        self, *, user_id: UUID, filters: Mapping[str, object], required: bool
+    ) -> ModelT | None:
+        entity = await self.repository.find_by(user_id=user_id, filters=filters)
+        if entity is None and required:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND, detail=f"{self.alias} not found"
+            )
+        return entity
+
+    async def find_by(
+        self, *, user: User, filters: Mapping[str, object], required: bool = True
+    ) -> ModelT | None:
+        async with self._operation("find_by", user.username):
+            return await self._find(user_id=user.id, filters=filters, required=required)
+
+    async def _get(self, identifier: UUID | str, user: User) -> ModelT:
+        entity = await self._find(
+            user_id=user.id, filters={"id": identifier}, required=True
+        )
+        assert entity is not None
+        return entity
+
+    @staticmethod
+    def _write_data(payload: BaseModel, *, partial: bool) -> dict[str, object]:
+        data = payload.model_dump(exclude_unset=partial)
+        managed = _MANAGED_FIELDS.intersection(data)
+        if managed:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_CONTENT,
+                detail=f"Server-managed fields cannot be supplied: {sorted(managed)}",
+            )
+        return data
+
+    @abstractmethod
+    def _build_entity(self, user_id: UUID, data: dict[str, object]) -> ModelT:
+        raise NotImplementedError
+
+    async def _normalize(
+        self, data: dict[str, object], user: User, entity_id: UUID | None = None
+    ) -> dict[str, object]:
+        return data
+
+    async def _prepare_create(
+        self, data: dict[str, object], user: User
+    ) -> dict[str, object]:
+        return await self._normalize(data, user)
+
+    async def _prepare_update(
+        self, entity: ModelT, data: dict[str, object], user: User
+    ) -> dict[str, object]:
+        return await self._normalize(data, user, entity_id=cast(UUID, entity.id))
+
+    async def create(self, user: User, payload: CreateT) -> ModelT:
+        async with self._operation("create", user.username):
+            return await self._create(user, payload)
+
+    async def _create(self, user: User, payload: CreateT) -> ModelT:
+        async with self.repository.transaction():
+            self.repository.require_owner(user.id)
+            data = await self._prepare_create(
+                self._write_data(payload, partial=False), user
+            )
+            result = await self.repository.save(
+                self._build_entity(user.id, data), user_id=user.id
+            )
+        await self._invalidate_cache(user, result, "create")
+        return result
+
+    async def update(
+        self, identifier: UUID | str, payload: UpdateT, user: User
+    ) -> Message:
+        async with self._operation("update", user.username, identifier):
+            async with self.repository.transaction():
+                entity = await self._get(identifier, user)
+                data = await self._prepare_update(
+                    entity, self._write_data(payload, partial=True), user
                 )
-            await self._invalidate_cache(identifier=param, finance_id=finance_id)
-            entity.deleted_at = utcnow()
-            await self.repository.update(entity)
-            return Message(message=successfully_message)
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=self.logger_params.logger,
-                service=self.logger_params.service,
-                operation="soft_delete",
-                user_request=user_request,
-                raise_exception=True,
-            )
-        finally:
-            log_service_success(
-                self.logger_params,
-                operation="soft_delete",
-                message=successfully_message,
-                user_request=user_request,
-            )
+                if _MANAGED_FIELDS.intersection(data):
+                    raise ValueError(
+                        "An update extension cannot replace managed fields"
+                    )
+                for field, value in data.items():
+                    self.repository._column(field)
+                    setattr(entity, field, value)
+                await self.repository.update(entity, user_id=user.id)
+            await self._invalidate_cache(user, entity, "update")
+            return Message(message=f"Update {self.alias} {identifier} successfully")
+
+    async def delete(self, user: User, identifier: UUID | str) -> Message:
+        async with self._operation("delete", user.username, identifier):
+            async with self.repository.transaction():
+                entity = await self._get(identifier, user)
+                await self.repository.delete(entity, user_id=user.id)
+            await self._invalidate_cache(user, entity, "delete")
+            return Message(message=f"Delete {self.alias} {identifier} successfully")

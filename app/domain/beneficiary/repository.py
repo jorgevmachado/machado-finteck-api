@@ -1,5 +1,5 @@
 from app.models import Beneficiary
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 
 class BeneficiaryRepository(BaseRepository[Beneficiary]):

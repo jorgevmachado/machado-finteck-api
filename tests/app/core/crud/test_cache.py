@@ -9,13 +9,13 @@ import pytest
 from app.core.exceptions import handle_service_exception
 from app.core.pagination import CustomLimitOffsetPage
 from app.shared.schemas import FilterPage
-from tests.app.temp.conftest import ItemCreate, ItemSchema, ItemUpdate
+from tests.app.core.crud.conftest import ItemCreate, ItemSchema, ItemUpdate
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_plain_crud_never_initializes_cache(service, user):
-    with patch("app.temp.service.CacheService") as cache:
+    with patch("app.core.service.base.CacheService") as cache:
         item = await service.create(user, ItemCreate(name="One"))
         await service.list_all(None, user)
         await service.find_by(user=user, filters={"id": item.id})
@@ -104,7 +104,10 @@ async def test_uuid_string_and_uuid_share_lookup_cache(
         assert first.id == identifier
         query.assert_awaited_once()
     assert len(cache_redis._data) == 1
-    with patch("app.temp.service.CacheService") as cache, pytest.raises(HTTPException):
+    with (
+        patch("app.core.service.base.CacheService") as cache,
+        pytest.raises(HTTPException),
+    ):
         await cached_service.find_one_cached(user=user, filters={"id": "invalid"})
     cache.assert_not_called()
 
@@ -279,9 +282,10 @@ async def test_cached_failures_have_single_operation_context(
         patch.object(
             target, attribute, new=AsyncMock(side_effect=RuntimeError("failure"))
         ),
-        patch("app.temp.service.log_service_success") as success,
+        patch("app.core.service.base.log_service_success") as success,
         patch(
-            "app.temp.service.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
         pytest.raises(HTTPException),
     ):

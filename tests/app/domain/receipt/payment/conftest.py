@@ -1,7 +1,8 @@
 from datetime import date
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -36,7 +37,14 @@ def payment(user, payment_values):
 def payment_repository():
     repository = AsyncMock(spec=PaymentRepository)
     repository.find_by.return_value = None
-    repository.save.side_effect = lambda *, entity: entity
+    repository.save.side_effect = lambda entity, *, user_id: entity
+    repository.require_owner = Mock()
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    repository.transaction = transaction
     return repository
 
 

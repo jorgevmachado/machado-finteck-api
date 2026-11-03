@@ -8,6 +8,7 @@ from app.domain.receipt.data.schema import ReceiptData, ReceiptDataError
 from app.domain.receipt.interpretation.schema import InterpretationResult
 from app.models import ReceiptStatusEnum
 
+
 class ReceiptSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -21,6 +22,15 @@ class ReceiptSchema(BaseModel):
     deleted_at: datetime | None = None
 
 
+class ReceiptCreateSchema(BaseModel):
+    file_name: str
+    file_type: str
+    file_size: int
+    file_hash: str
+    status: ReceiptStatusEnum
+    data: dict[str, object] | None
+
+
 class ReceiptUploadSchema(InterpretationResult):
     id: UUID
     data: ReceiptData | None = None
@@ -31,6 +41,7 @@ class ReceiptUploadSchema(InterpretationResult):
     file_size: int
     error_message: str | None = None
 
+
 class BatchReceiptSchema(BaseModel):
     total: int
     items: list[ReceiptUploadSchema]
@@ -38,6 +49,7 @@ class BatchReceiptSchema(BaseModel):
     received: int
     processed: int
     processing: int
+
 
 class ReceiptConfirmSchema(BaseModel):
     payer: str

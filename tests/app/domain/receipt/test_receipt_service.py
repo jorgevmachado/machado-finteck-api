@@ -1,4 +1,5 @@
 from io import BytesIO
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
@@ -35,7 +36,13 @@ def service():
     repository = MagicMock(spec=ReceiptRepository)
     repository.session = MagicMock()
     repository.find_by.return_value = None
-    repository.save.side_effect = lambda *, entity: entity
+    repository.save.side_effect = lambda *, entity, user_id: entity
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    repository.transaction = transaction
     return ReceiptService(repository)
 
 
@@ -75,8 +82,12 @@ async def test_upload_interprets_extracted_text_with_active_user_rules(
         user_id=None, name="Default", institution_code=None
     )
     rules.append(ReceiptRulesSchema.model_validate(default))
-    service.rules_service.list_all.return_value = rules
-    file = UploadFile(file=BytesIO(b"content"), filename="receipt.pdf")
+    service.rules_service.list_profiles.return_value = rules
+    file = UploadFile(
+        file=BytesIO(b"content"),
+        filename="receipt.pdf",
+        headers=Headers({"content-type": "application/pdf"}),
+    )
     with (
         patch(f"{MODULE}.validate_file", return_value=b"content"),
         patch(f"{MODULE}.Interpretation") as interpretation,
@@ -99,7 +110,7 @@ async def test_upload_interprets_extracted_text_with_active_user_rules(
         interpretation.return_value.result.return_value = expected
         result = await service.upload(file, user)
 
-    service.rules_service.list_all.assert_awaited_once_with(
+    service.rules_service.list_profiles.assert_awaited_once_with(
         ReceiptRulesFilter(is_active=True, limit=None), user
     )
     interpretation.assert_called_once_with(rules, "receipt text")
@@ -121,11 +132,11 @@ async def test_upload_does_not_report_success_when_loading_rules_fails(user, ser
     service.extraction_service = AsyncMock()
     service.extraction_service.extract.return_value = "receipt text"
     service.rules_service = AsyncMock()
-    service.rules_service.list_all.side_effect = RuntimeError("database failure")
+    service.rules_service.list_profiles.side_effect = RuntimeError("database failure")
     with (
         patch(f"{MODULE}.validate_file", return_value=b"content"),
-        patch.object(service, "find_by", return_value=None),
-        patch(f"{MODULE}.log_service_success") as success,
+        patch.object(service, "find_by_hash", return_value=None),
+        patch("app.core.service.base.log_service_success") as success,
         pytest.raises(HTTPException) as caught,
     ):
         await service.upload(
@@ -136,19 +147,19 @@ async def test_upload_does_not_report_success_when_loading_rules_fails(user, ser
 
 
 async def test_find_by_uses_owner_context_for_operation_logging(user, service):
-    with patch(f"{MODULE}.log_service_success") as success:
-        result = await service.find_by(user, "file-hash")
+    with patch("app.core.service.base.log_service_success") as success:
+        result = await service.find_by_hash(user, "file-hash")
     assert result is None
     assert success.call_args.kwargs["user_request"] == user.username
     assert success.call_args.kwargs["operation"] == "find_by"
     service.repository.find_by.assert_awaited_once_with(
-        file_hash="file-hash", user_id=user.id
+        filters={"file_hash": "file-hash"}, user_id=user.id
     )
 
 
 @pytest.mark.parametrize("paginated", [True, False])
 async def test_list_all_scopes_results_to_owner(user, service, receipt, paginated):
-    page_filter = FilterPage.build(limit=2, offset=0, user_id=uuid4())
+    page_filter = FilterPage(limit=2, offset=0)
     expected = (
         CustomLimitOffsetPage.create(
             [receipt], total=1, params=LimitOffsetParams(limit=2, offset=0)
@@ -158,15 +169,15 @@ async def test_list_all_scopes_results_to_owner(user, service, receipt, paginate
     )
     service.repository.list_all.return_value = expected
 
-    with patch(f"{MODULE}.log_service_success") as success:
+    with patch("app.core.service.base.log_service_success") as success:
         result = await service.list_all(page_filter, user)
 
     assert result is expected
     scoped_filter = service.repository.list_all.call_args.kwargs["page_filter"]
-    assert scoped_filter.user_id == user.id
+    assert service.repository.list_all.call_args.kwargs["user_id"] == user.id
+    assert scoped_filter is page_filter
     assert scoped_filter.limit == 2
     assert scoped_filter.offset == 0
-    assert page_filter.user_id != user.id
     assert success.call_args.kwargs["user_request"] == user.username
 
 
@@ -175,7 +186,9 @@ async def test_find_one_scopes_lookup_to_owner(user, service, receipt):
 
     assert await service.find_one(receipt.id, user) is receipt
 
-    service.repository.find_by.assert_awaited_once_with(id=receipt.id, user_id=user.id)
+    service.repository.find_by.assert_awaited_once_with(
+        filters={"id": receipt.id}, user_id=user.id
+    )
 
 
 async def test_find_one_not_found_returns_404(user, service):
@@ -184,6 +197,61 @@ async def test_find_one_not_found_returns_404(user, service):
 
     assert caught.value.status_code == 404
     assert caught.value.detail == "Receipt not found"
+
+
+async def test_persist_upload_logs_only_after_transaction_commits(user, service):
+    committed = False
+
+    @asynccontextmanager
+    async def transaction():
+        nonlocal committed
+        yield
+        committed = True
+
+    service.repository.transaction = transaction
+    interpretation = InterpretationResult(
+        data=ReceiptData.model_validate(
+            {
+                name: {"value": None, "status": DataStatusEnum.NOT_FOUND}
+                for name in ReceiptData.model_fields
+            }
+        ),
+        errors=[],
+    )
+    with patch("app.core.service.base.log_service_success") as success:
+        success.side_effect = lambda *args, **kwargs: (
+            None if committed else pytest.fail("Success before commit")
+        )
+        result = await service.persist_upload(
+            user=user,
+            file_size=7,
+            file_hash="hash",
+            interpretation=interpretation,
+            file_name="receipt.pdf",
+            content_type="application/pdf",
+        )
+    assert result.status == ReceiptStatusEnum.RECEIVED
+    assert result.user_id == user.id
+    success.assert_called_once()
+
+
+async def test_confirmation_commit_failure_never_reports_success(
+    confirmation_service, receipt, user, confirm_payload
+):
+    @asynccontextmanager
+    async def transaction():
+        yield
+        raise RuntimeError("commit failed")
+
+    confirmation_service.repository.transaction = transaction
+    with patch("app.core.service.base.log_service_success") as success:
+        with pytest.raises(HTTPException) as caught:
+            await confirmation_service.confirm(receipt.id, user, confirm_payload)
+    assert caught.value.status_code == 500
+    assert str(caught.value.__cause__) == "commit failed"
+    assert all(
+        entry.kwargs["operation"] != "confirm" for entry in success.call_args_list
+    )
 
 
 @pytest.mark.parametrize("operation", ["list_all", "find_one"])
@@ -195,9 +263,9 @@ async def test_read_failure_is_logged_and_propagated(user, service, operation):
     )
     repository_method.side_effect = RuntimeError("database failure")
     with (
-        patch(f"{MODULE}.log_service_success") as success,
+        patch("app.core.service.base.log_service_success") as success,
         patch(
-            f"{MODULE}.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception", wraps=handle_service_exception
         ) as error,
         pytest.raises(HTTPException) as caught,
     ):
@@ -270,7 +338,7 @@ async def test_upload_retries_failed_receipt_and_preserves_identity(
     with patch(f"{MODULE}.validate_file", return_value=b"retry content"):
         result = await service.upload(file, user)
 
-    service.repository.save.assert_awaited_once_with(entity=receipt)
+    service.repository.save.assert_awaited_once_with(entity=receipt, user_id=user.id)
     service.extraction_service.extract.assert_awaited_once_with(
         content=b"retry content", content_type=file.content_type
     )
@@ -334,7 +402,9 @@ async def test_validate_confirm_receipt_requires_received_status(
         assert caught.value.status_code == 409
         assert caught.value.detail == "Receipt is not ready for confirmation"
 
-    service.repository.find_by.assert_awaited_once_with(id=receipt.id, user_id=user.id)
+    service.repository.find_by.assert_awaited_once_with(
+        filters={"id": receipt.id}, user_id=user.id
+    )
     service.repository.save.assert_not_awaited()
 
 
@@ -369,7 +439,7 @@ async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
         assert receipt.status == ReceiptStatusEnum.RECEIVED
         service.repository.save.assert_not_awaited()
 
-    service.payment_service.create.side_effect = create_payment
+    service.payment_service.create_payment.side_effect = create_payment
 
     result = await service.confirm(receipt.id, user, confirm_payload)
 
@@ -392,7 +462,7 @@ async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
             else []
         ),
     ]
-    service.payment_service.create.assert_awaited_once_with(
+    service.payment_service.create_payment.assert_awaited_once_with(
         user=user,
         payer_id=service.payer_service.resolve.return_value.id,
         receipt_id=receipt.id,
@@ -405,7 +475,7 @@ async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
         destination_institution_id=destination.id if has_destination else None,
     )
     assert receipt.status == ReceiptStatusEnum.PROCESSED
-    service.repository.save.assert_awaited_once_with(entity=receipt)
+    service.repository.save.assert_awaited_once_with(entity=receipt, user_id=user.id)
 
 
 @pytest.mark.parametrize(
@@ -443,7 +513,7 @@ async def test_confirm_propagates_failures_without_reporting_success(
             "source": service.institution_service.resolve,
             "subcategory": service.category_service.find_subcategory_by_id,
             "destination": service.institution_service.resolve,
-            "create": service.payment_service.create,
+            "create": service.payment_service.create_payment,
             "save": service.repository.save,
         }
         if failure == "duplicate":
@@ -455,7 +525,7 @@ async def test_confirm_propagates_failures_without_reporting_success(
             dependencies[failure].side_effect = exception
 
     with (
-        patch(f"{MODULE}.log_service_success") as success,
+        patch("app.core.service.base.log_service_success") as success,
         pytest.raises(HTTPException) as caught,
     ):
         await service.confirm(receipt.id, user, confirm_payload)
@@ -465,7 +535,7 @@ async def test_confirm_propagates_failures_without_reporting_success(
         entry.kwargs["operation"] != "confirm" for entry in success.call_args_list
     )
     if failure not in ("create", "save"):
-        service.payment_service.create.assert_not_awaited()
+        service.payment_service.create_payment.assert_not_awaited()
     if failure != "save":
         service.repository.save.assert_not_awaited()
         assert receipt.status != ReceiptStatusEnum.PROCESSED

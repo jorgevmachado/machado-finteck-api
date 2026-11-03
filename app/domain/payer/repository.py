@@ -1,5 +1,5 @@
 from app.models import Payer
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 
 class PayerRepository(BaseRepository[Payer]):

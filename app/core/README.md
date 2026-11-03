@@ -1,8 +1,7 @@
-# CRUD experimental
+# Bases CRUD
 
-Este pacote nao substitui `app.core`. O dominio `payer` e o primeiro piloto
-integrado; os demais dominios continuam com suas implementacoes atuais.
-Imports devem usar `app.temp` explicitamente.
+As bases compartilhadas ficam em `app.core.repository` e `app.core.service`.
+Os dominios preservam suas regras especificas por meio dos hooks das bases.
 
 ## Diagnostico
 
@@ -25,7 +24,7 @@ O modelo precisa de `id` e `user_id` UUID mapeados. Declare apenas os campos
 consultaveis; nao ha descoberta implicita de campos ou caminhos relacionais.
 
 ```python
-from app.temp import BaseRepository
+from app.core.repository import BaseRepository
 
 class ItemRepository(BaseRepository[Item]):
     model = Item
@@ -70,7 +69,7 @@ Os aliases sao declarados explicitamente pelo repository, nao pelo cliente:
 from datetime import date
 
 from app.shared.schemas import FilterPage
-from app.temp import BaseRepository, RangeFilter, RelationFilter
+from app.core.repository import BaseRepository, RangeFilter, RelationFilter
 
 class PaymentRepository(BaseRepository[Payment]):
     model = Payment
@@ -101,7 +100,7 @@ items = await PaymentRepository(session).list_all(
 )
 ```
 
-Este exemplo nao migra o PaymentRepository existente. `RelationFilter` usa `has`
+`RelationFilter` usa `has`
 em relacao escalar e `any` em colecao: nao multiplica linhas raiz nem totais.
 Relacoes diferentes para o mesmo modelo sao independentes. Cada alias representa
 uma condicao existencial independente; nao e uma linguagem de joins arbitrarios.
@@ -138,6 +137,9 @@ nunca commit. Update nao e upsert. Falhas de validacao, escrita, commit ou
 cancelamento tentam rollback; erro de rollback e registrado sem esconder a
 causa original. Componha primitivas dentro da fronteira, nao mutacoes publicas
 aninhadas. Exclusao padrao e fisica, mesmo se existir `deleted_at`.
+Para optar pela exclusao logica, declare `soft_delete = True` no repository.
+O modelo deve possuir `deleted_at` mapeado; buscas, listas e contagens ocultam
+os registros excluidos. Hooks de visibilidade devem preservar `super()`.
 
 ## Service e `_operation`
 
@@ -145,7 +147,7 @@ O service recebe repository, alias e `LoggingParams`. A identidade vem de `User`
 confiavel, nao do payload. A subclasse so precisa construir a entidade:
 
 ```python
-from app.temp import BaseService
+from app.core.service import BaseService
 
 class ItemService(BaseService[Item, ItemCreate, ItemUpdate]):
     def _build_entity(self, user_id, data):
@@ -155,6 +157,8 @@ service = ItemService(repository, alias="Item", logger_params=logging_params)
 entity = await service.create(user, ItemCreate(name="Example"))
 items = await service.list_all(FilterPage(), user)
 entity = await service.find_by(user=user, filters={"id": entity.id})
+entity = await service.find_one(entity.id, user)
+total = await service.count(user=user, filters={"name": "Example"})
 await service.update(entity.id, ItemUpdate(description=None), user)
 await service.delete(user, entity.id)
 ```
@@ -306,9 +310,9 @@ dominios. A API interna nao e uma substituta drop-in dos servicos atuais.
 ## Verificacao
 
 ```bash
-poetry run pytest -q tests/app/temp
-poetry run ruff check app/temp tests/app/temp
-poetry run ruff format --check app/temp tests/app/temp
+poetry run pytest -q tests/app/core
+poetry run ruff check app/core tests/app/core
+poetry run ruff format --check app/core tests/app/core
 ```
 
 Os exemplos executaveis estao nos testes locais, com banco SQLite async
