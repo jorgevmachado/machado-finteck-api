@@ -1,22 +1,18 @@
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from http import HTTPStatus
-from typing import AsyncIterator
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.exceptions import handle_service_exception
-from app.core.logging import LoggingParams, log_service_success
+from app.core.logging import LoggingParams
 from app.core.pagination import CustomLimitOffsetPage
 
 from app.domain.receipt.payment.repository import PaymentRepository
 from app.domain.receipt.payment.schema import (
+    PaymentCreateSchema,
     PaymentDashboardResponseSchema,
     PaymentDashboardPayerSchema,
     PaymentDashboardPeriodSchema,
@@ -29,70 +25,49 @@ from app.domain.receipt.payment.schema import (
 )
 from app.models import User, Payment
 from app.shared.schemas import FilterPage
+from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
 
 
-class PaymentService:
+class PaymentService(BaseService[Payment, PaymentCreateSchema]):
+    repository_class = PaymentRepository
+    repository: PaymentRepository
+
     def __init__(self, repository: PaymentRepository):
-        self.alias = "Payment"
-        self.repository = repository
-        self.logger_params = LoggingParams(
-            logger=logger, service="PaymentService", operation="payment"
+        super().__init__(
+            repository,
+            alias="Payment",
+            logger_params=LoggingParams(
+                logger=logger, service="PaymentService", operation="payment"
+            ),
         )
 
-    @classmethod
-    def from_session(cls, session: AsyncSession) -> PaymentService:
-        return cls(PaymentRepository(session))
-
-    @asynccontextmanager
-    async def _operation(
-        self, operation: str, user_request: str, target_id: UUID | None = None
-    ) -> AsyncIterator[None]:
-        try:
-            yield
-        except Exception as exception:
-            handle_service_exception(
-                exception,
-                logger=logger,
-                service=self.logger_params.service,
-                operation=operation,
-                user_request=user_request,
-                raise_exception=True,
-            )
-        else:
-            log_service_success(
-                self.logger_params,
-                operation=operation,
-                message=(f"Receipt Payment {operation} successfully: {target_id}"),
-                user_request=user_request,
-            )
+    def _build_entity(self, user_id: UUID, data: dict[str, object]) -> Payment:
+        payload = PaymentCreateSchema.model_validate(data)
+        return Payment(user_id=user_id, **payload.model_dump())
 
     async def list_all(
-        self, page_filter: FilterPage, user: User
+        self, page_filter: FilterPage | None, user: User
     ) -> list[Payment] | CustomLimitOffsetPage[Payment]:
         async with self._operation("list_all", user.username):
             return await self.repository.list(user_id=user.id, page_filter=page_filter)
 
-    async def find_one(self, payment_id: UUID, user: User) -> Payment:
-        async with self._operation("find_one", user.username, payment_id):
-            payment = await self.repository.find_by(id=payment_id, user_id=user.id)
-            if payment is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.NOT_FOUND, detail="Payment not found"
-                )
-            return payment
+    async def find_one(self, payment_id: UUID | str, user: User) -> Payment:
+        return await super().find_one(payment_id, user)
 
-    async def find_by(self, user: User, receipt_id: UUID) -> Payment | None:
+    async def find_by_receipt(self, user: User, receipt_id: UUID) -> Payment | None:
         user_id, username = user.id, user.username
         async with self._operation("find_by", username, None):
-            return await self.repository.find_by(receipt_id=receipt_id, user_id=user_id)
+            return await self._find(
+                filters={"receipt_id": receipt_id}, user_id=user_id, required=False
+            )
 
     async def check_receipt(self, receipt_id: UUID, user: User) -> None:
         user_id, username = user.id, user.username
         async with self._operation("check_receipt", username, None):
             payment = await self.repository.find_by(
-                receipt_id=receipt_id, user_id=user_id
+                filters={"receipt_id": receipt_id}, user_id=user_id
             )
             if payment is not None:
                 raise HTTPException(
@@ -100,7 +75,7 @@ class PaymentService:
                     detail="Receipt already has a payment",
                 )
 
-    async def create(
+    async def create_payment(
         self,
         user: User,
         payer_id: UUID,
@@ -113,11 +88,11 @@ class PaymentService:
         description: str | None,
         destination_institution_id: UUID | None,
     ) -> Payment:
-        user_id, username = user.id, user.username
+        username = user.username
         async with self._operation("create", username, None):
-            return await self.repository.save(
-                entity=Payment(
-                    user_id=user_id,
+            return await self._create(
+                user,
+                PaymentCreateSchema(
                     payer_id=payer_id,
                     receipt_id=receipt_id,
                     amount=amount,
@@ -127,7 +102,7 @@ class PaymentService:
                     source_institution_id=source_institution_id,
                     description=description,
                     destination_institution_id=destination_institution_id,
-                )
+                ),
             )
 
     async def get_dashboard(

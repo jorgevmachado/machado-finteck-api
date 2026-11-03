@@ -24,6 +24,7 @@ class CreditCardSchema(BaseModel):
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
 
+
 class CreditCardCreateSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -33,7 +34,7 @@ class CreditCardCreateSchema(BaseModel):
     limit: int | None = None
     color: str | None = None
     due_day: int
-    is_active: bool | None = True
+    is_active: bool = True
     closing_day: int
     description: str | None = None
     last_four_digits: str | None = None
@@ -45,11 +46,11 @@ class CreditCardUpdateSchema(CreditCardCreateSchema):
     due_day: int | None = None
     closing_day: int | None = None
 
-    @field_validator("brand", "name", "due_day", "closing_day")
+    @field_validator("brand", "name", "due_day", "closing_day", "is_active")
     @classmethod
     def reject_explicit_null(
-        cls, value: CreditCardBrandEnum | str | None
-    ) -> CreditCardBrandEnum | str:
+        cls, value: CreditCardBrandEnum | str | bool | None
+    ) -> CreditCardBrandEnum | str | bool:
         if value is None:
             raise ValueError("Field cannot be null")
         return value

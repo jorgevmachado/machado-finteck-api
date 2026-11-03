@@ -28,6 +28,18 @@ class PaymentSchema(BaseModel):
     deleted_at: datetime | None = None
 
 
+class PaymentCreateSchema(BaseModel):
+    payer_id: UUID
+    receipt_id: UUID
+    amount: Decimal
+    payment_date: date
+    beneficiary_id: UUID
+    subcategory_id: UUID
+    source_institution_id: UUID
+    description: str | None
+    destination_institution_id: UUID | None
+
+
 class PaymentDashboardPeriodSchema(BaseModel):
     end_date: date
     start_date: date

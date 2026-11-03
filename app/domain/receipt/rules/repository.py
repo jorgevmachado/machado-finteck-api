@@ -1,130 +1,85 @@
 from __future__ import annotations
 
-import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from uuid import UUID
 
-from sqlalchemy import func, inspect, or_, select, text
+from sqlalchemy import ColumnElement, Select, or_, select, text
 from sqlalchemy.orm import lazyload, selectinload
+from sqlalchemy.orm.util import object_state
 
 from app.core.pagination import CustomLimitOffsetPage
-from app.core.pagination.pagination import get_limit_offset_params, is_paginate
-from app.core.repository import BaseRepository
+from app.core.pagination.pagination import is_paginate
 from app.domain.receipt.rules.business import RuleReconciliationPlan
 from app.domain.receipt.rules.enums import ProfileScope
 from app.domain.receipt.rules.field.schema import ReceiptFieldRuleReconcileSchema
 from app.domain.receipt.rules.identification.schema import (
     ReceiptIdentificationRuleReconcileSchema,
 )
-from app.domain.receipt.rules.schema import ReceiptRulesFilter
 from app.models import (
     ReceiptInterpretationProfile,
     ReceiptFieldRule,
     ReceiptIdentificationRule,
     utcnow,
 )
-
-logger = logging.getLogger(__name__)
-_TRANSACTION_KEY = "app.domain.receipt.profile.transaction_active"
+from app.shared.schemas import FilterPage
+from app.core.repository import BaseRepository
 
 
 class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
     model = ReceiptInterpretationProfile
+    filter_fields = ("id", "name", "institution_code", "is_active")
+    relations = (
+        selectinload(
+            ReceiptInterpretationProfile.field_rules.and_(
+                ReceiptFieldRule.deleted_at.is_(None)
+            )
+        ),
+        selectinload(
+            ReceiptInterpretationProfile.identification_rules.and_(
+                ReceiptIdentificationRule.deleted_at.is_(None)
+            )
+        ),
+    )
 
-    @asynccontextmanager
-    async def transaction(self) -> AsyncIterator[None]:
-        if (
-            self.session.info.get(_TRANSACTION_KEY)
-            or self.session.in_nested_transaction()
-        ):
-            raise RuntimeError("Nested receipt profile transactions are not supported")
-        self.session.info[_TRANSACTION_KEY] = True
-        try:
-            if not self.session.in_transaction():
-                await self.session.begin()
-            yield
-            await self.session.commit()
-        except BaseException:
-            try:
-                await self.session.rollback()
-            except BaseException:
-                logger.exception("Failed to roll back receipt profile transaction")
-            raise
-        finally:
-            self.session.info.pop(_TRANSACTION_KEY, None)
+    def _visibility(self) -> tuple[ColumnElement[bool], ...]:
+        return (self.model.deleted_at.is_(None),)
 
-    @staticmethod
-    def _visibility(user_id: UUID):
-        return (
-            or_(
-                ReceiptInterpretationProfile.user_id == user_id,
-                ReceiptInterpretationProfile.user_id.is_(None),
-            ),
-            ReceiptInterpretationProfile.deleted_at.is_(None),
+    def _build_query(self, *, user_id: UUID) -> Select[ReceiptInterpretationProfile]:
+        self.require_owner(user_id)
+        return select(self.model).where(
+            or_(self.model.user_id == user_id, self.model.user_id.is_(None)),
+            *self._visibility(),
         )
-
-    @staticmethod
-    def _children():
-        return (
-            selectinload(
-                ReceiptInterpretationProfile.field_rules.and_(
-                    ReceiptFieldRule.deleted_at.is_(None)
-                )
-            ),
-            selectinload(
-                ReceiptInterpretationProfile.identification_rules.and_(
-                    ReceiptIdentificationRule.deleted_at.is_(None)
-                )
-            ),
-        )
-
-    def _require_transaction(self) -> None:
-        if not self.session.info.get(_TRANSACTION_KEY):
-            raise RuntimeError("Receipt profile mutations require transaction()")
 
     async def list_all(
-        self, page_filter: ReceiptRulesFilter, *, user_id: UUID
+        self, *, user_id: UUID, page_filter: FilterPage | None = None
     ) -> (
         list[ReceiptInterpretationProfile]
         | CustomLimitOffsetPage[ReceiptInterpretationProfile]
     ):
-        conditions = list(self._visibility(user_id))
-        if page_filter.is_active is not None:
-            conditions.append(self.model.is_active.is_(page_filter.is_active))
-        if page_filter.name is not None:
-            conditions.append(self.model.name == page_filter.name)
-        if page_filter.institution_code is not None:
-            conditions.append(
-                self.model.institution_code == page_filter.institution_code
-            )
-        if page_filter.scope is not None:
-            conditions.append(
+        raw = (
+            page_filter.model_dump(exclude_none=True) if page_filter is not None else {}
+        )
+        filters = self.validate_filters(
+            user_id=user_id,
+            filters={field: raw[field] for field in self.filter_fields if field in raw},
+        )
+        query = self._build_filter(self._build_query(user_id=user_id), filters)
+        scope = raw.get("scope")
+        if scope is not None:
+            query = query.where(
                 self.model.user_id.is_(None)
-                if page_filter.scope == ProfileScope.SYSTEM
+                if ProfileScope(scope) == ProfileScope.SYSTEM
                 else self.model.user_id == user_id
             )
-        query = (
-            select(self.model)
-            .where(*conditions)
-            .options(*self._children())
-            .execution_options(populate_existing=True)
-            .order_by(self.model.created_at, self.model.id)
-        )
-        if not is_paginate(page_filter):
-            return list((await self.session.scalars(query)).all())
-        params = get_limit_offset_params(page_filter)
-        total = await self.session.scalar(
-            select(func.count(self.model.id)).where(*conditions)
-        )
-        entities = await self.session.scalars(
-            query.limit(params.limit).offset(params.offset)
-        )
-        return CustomLimitOffsetPage.create(
-            items=list(entities.all()), total=total, params=params
-        )
+        query = self._order_by(
+            self._load_relations(query), order_by="created_at", order="asc"
+        ).execution_options(populate_existing=True)
+        if page_filter is not None and is_paginate(page_filter):
+            return await self._list_paginate(query, page_filter=page_filter)
+        return await self._execute_list(query)
 
-    async def save(
+    async def save_profile(
         self,
         entity: ReceiptInterpretationProfile,
         *,
@@ -189,18 +144,21 @@ class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
                     for key, value in values.items():
                         setattr(child, key, value)
                     child.updated_at = now
-        if inspect(entity).persistent:
+        if object_state(entity).persistent:
             entity.updated_at = now
         self.session.add(entity)
         await self.session.flush()
         return entity
 
     async def find_by(
-        self, *, id: UUID, user_id: UUID, for_update: bool = False
+        self,
+        *,
+        user_id: UUID,
+        filters: Mapping[str, object],
+        for_update: bool = False,
     ) -> ReceiptInterpretationProfile | None:
-        query = select(self.model).where(
-            self.model.id == id, *self._visibility(user_id)
-        )
+        criteria = self.prepare_lookup(user_id=user_id, filters=filters)
+        query = self._build_filter(self._build_query(user_id=user_id), criteria)
         if for_update:
             self._require_transaction()
             locked = await self.session.scalar(
@@ -212,7 +170,7 @@ class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
             if locked is None:
                 return None
         return await self.session.scalar(
-            query.options(*self._children()).execution_options(populate_existing=True)
+            self._load_relations(query).execution_options(populate_existing=True)
         )
 
     async def lock_seed(self) -> None:
@@ -230,7 +188,7 @@ class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
             select(self.model).where(
                 self.model.user_id == user_id,
                 self.model.institution_code == institution_code,
-                self.model.deleted_at.is_(None),
+                *self._visibility(),
             )
         )
 
@@ -241,16 +199,14 @@ class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
         user_id: UUID,
         exclude_id: UUID | None = None,
     ) -> ReceiptInterpretationProfile | None:
-        query = select(ReceiptInterpretationProfile).where(
-            ReceiptInterpretationProfile.name == name,
-            ReceiptInterpretationProfile.user_id == user_id,
-            ReceiptInterpretationProfile.deleted_at.is_(None),
+        query = self._build_filter(
+            super()._build_query(user_id=user_id), {"name": name}
         )
         if exclude_id is not None:
-            query = query.where(ReceiptInterpretationProfile.id != exclude_id)
+            query = query.where(self.model.id != exclude_id)
         return await self.session.scalar(query)
 
-    async def delete(self, entity: ReceiptInterpretationProfile) -> None:
+    async def delete_profile(self, entity: ReceiptInterpretationProfile) -> None:
         self._require_transaction()
         now = utcnow()
         for item in (entity, *entity.field_rules, *entity.identification_rules):

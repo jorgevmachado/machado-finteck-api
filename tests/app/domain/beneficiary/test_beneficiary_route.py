@@ -1,9 +1,13 @@
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
+from app.core.database import get_session
 from app.core.security import get_current_user
 from app.domain.beneficiary.route import (
     create,
@@ -50,26 +54,27 @@ class TestBeneficiaryRoutes:
     async def test_crud_routes_delegate_with_authenticated_user(
         user, create_beneficiary_payload, update_beneficiary_payload
     ):
+        resource_id = uuid4()
         service = AsyncMock()
         page_filter = FilterPage.build(name="Electric Company")
 
         await create(service, user, create_beneficiary_payload)
         await list_all(service, user, page_filter)
-        await find_one("beneficiary-id", service, user)
-        await update(service, "beneficiary-id", user, update_beneficiary_payload)
-        await delete(service, "beneficiary-id", user)
+        await find_one(resource_id, service, user)
+        await update(service, resource_id, user, update_beneficiary_payload)
+        await delete(service, resource_id, user)
 
         service.create.assert_awaited_once_with(
             user=user, payload=create_beneficiary_payload
         )
         service.list_all.assert_awaited_once_with(page_filter=page_filter, user=user)
-        service.find_by.assert_awaited_once_with(
-            id="beneficiary-id", user_request=user.username, user_id=user.id
-        )
+        service.find_by.assert_awaited_once_with(filters={"id": resource_id}, user=user)
         service.update.assert_awaited_once_with(
-            beneficiary_id="beneficiary-id", payload=update_beneficiary_payload, user=user
+            identifier=resource_id,
+            payload=update_beneficiary_payload,
+            user=user,
         )
-        service.delete.assert_awaited_once_with(user=user, beneficiary_id="beneficiary-id")
+        service.delete.assert_awaited_once_with(user=user, identifier=resource_id)
 
     @staticmethod
     def test_delete_endpoint_preserves_service_response(user):
@@ -81,7 +86,73 @@ class TestBeneficiaryRoutes:
         app.dependency_overrides[get_current_user] = lambda: user
 
         with TestClient(app) as client:
-            response = client.delete("/beneficiaries/beneficiary-id")
+            response = client.delete(f"/beneficiaries/{uuid4()}")
+            malformed = client.delete("/beneficiaries/not-a-uuid")
 
         assert response.status_code == 200
         assert response.json() == {"message": "Deleted"}
+        assert malformed.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_http_crud_with_real_beneficiary_service_and_database(
+    beneficiary_session, beneficiary_cache, user
+):
+    app = FastAPI()
+    app.include_router(router, prefix="/beneficiaries")
+
+    async def session_override():
+        yield beneficiary_session
+
+    app.dependency_overrides[get_session] = session_override
+    app.dependency_overrides[get_current_user] = lambda: user
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/beneficiaries", json={"name": " Electric Company "}
+        )
+        assert created.status_code == 201
+        body = created.json()
+        identifier = body["id"]
+        assert body["name"] == "Electric Company"
+        assert set(body) == {"id", "name", "created_at", "updated_at", "deleted_at"}
+        assert (await client.get(f"/beneficiaries/{identifier}")).json() == body
+        page = await client.get(
+            "/beneficiaries",
+            params={"offset": 0, "limit": 1, "name": "Electric Company"},
+        )
+        assert page.status_code == 200
+        assert page.json()["meta"]["total"] == 1
+        assert page.json()["items"] == [body]
+        assert (
+            await client.post("/beneficiaries", json={"name": "electric company"})
+        ).status_code == 409
+        updated = await client.put(
+            f"/beneficiaries/{identifier}", json={"name": "Water Company"}
+        )
+        assert updated.json() == {
+            "message": f"Update Beneficiary {identifier} successfully"
+        }
+        assert (await client.get(f"/beneficiaries/{identifier}")).json()[
+            "name"
+        ] == "Water Company"
+        assert (
+            await client.put(f"/beneficiaries/{identifier}", json={"name": None})
+        ).status_code == 422
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+            id=uuid4(), username="other"
+        )
+        for method in ("get", "put", "delete"):
+            kwargs = {"json": {"name": "No"}} if method == "put" else {}
+            assert (
+                await getattr(client, method)(f"/beneficiaries/{identifier}", **kwargs)
+            ).status_code == 404
+        assert (await client.get("/beneficiaries")).json() == []
+        app.dependency_overrides[get_current_user] = lambda: user
+        deleted = await client.delete(f"/beneficiaries/{identifier}")
+        assert deleted.json() == {
+            "message": f"Delete Beneficiary {identifier} successfully"
+        }
+        assert (await client.get(f"/beneficiaries/{identifier}")).status_code == 404
+        assert (await client.delete(f"/beneficiaries/{identifier}")).status_code == 404

@@ -32,7 +32,7 @@ class AccountCreateSchema(BaseModel):
     name: str
     color: str | None = None
     agency: str | None = None
-    is_active: bool | None = True
+    is_active: bool = True
     description: str | None = None
     account_number: str | None = None
     financial_institution: str | None = None
@@ -42,11 +42,11 @@ class AccountUpdateSchema(AccountCreateSchema):
     type: AccountTypeEnum | None = None
     name: str | None = None
 
-    @field_validator("type", "name")
+    @field_validator("type", "name", "is_active")
     @classmethod
     def reject_explicit_null(
-        cls, value: AccountTypeEnum | str | None
-    ) -> AccountTypeEnum | str:
+        cls, value: AccountTypeEnum | str | bool | None
+    ) -> AccountTypeEnum | str | bool:
         if value is None:
             raise ValueError("Field cannot be null")
         return value

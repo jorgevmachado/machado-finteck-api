@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Annotated
+from uuid import UUID
 from http import HTTPStatus
 
 from fastapi import APIRouter, Depends
@@ -14,7 +15,7 @@ from app.domain.account.schema import (
     AccountUpdateSchema,
 )
 from app.domain.account.service import AccountService
-from app.models import User
+from app.models import AccountTypeEnum, User
 from app.shared.schemas import FilterPage, Message
 
 router = APIRouter()
@@ -27,7 +28,7 @@ def account_service(session: Session) -> AccountService:
 
 
 def account_filter(
-    type: str | None = None,
+    type: AccountTypeEnum | None = None,
     page: int | None = None,
     name: str | None = None,
     limit: int | None = 12,
@@ -37,7 +38,6 @@ def account_filter(
     account_number: str | None = None,
     financial_institution: str | None = None,
     clean_cache: bool = False,
-    with_deleted: bool = False,
 ) -> FilterPage:
     return FilterPage.build(
         type=type,
@@ -50,7 +50,6 @@ def account_filter(
         account_number=account_number,
         financial_institution=financial_institution,
         clean_cache=clean_cache,
-        with_deleted=with_deleted,
     )
 
 
@@ -83,12 +82,11 @@ async def list_all(
     )
 
 
-@router.get("/{param}", response_model=AccountSchema, status_code=HTTPStatus.OK)
-async def find_one(param: str, service: Service, current_user: CurrentUser):
+@router.get("/{account_id}", response_model=AccountSchema, status_code=HTTPStatus.OK)
+async def find_one(account_id: UUID, service: Service, current_user: CurrentUser):
     return await service.find_by(
-        id=param,
-        user_request=current_user.username,
-        user_id=current_user.id,
+        filters={"id": account_id},
+        user=current_user,
     )
 
 
@@ -99,12 +97,12 @@ async def find_one(param: str, service: Service, current_user: CurrentUser):
 )
 async def update(
     service: Service,
-    account_id: str,
+    account_id: UUID,
     current_user: CurrentUser,
     payload: AccountUpdateSchema,
 ):
     return await service.update(
-        param=account_id, update_schema=payload, user=current_user
+        identifier=account_id, payload=payload, user=current_user
     )
 
 
@@ -115,7 +113,7 @@ async def update(
 )
 async def delete(
     service: Service,
-    account_id: str,
+    account_id: UUID,
     current_user: CurrentUser,
 ):
-    return await service.delete(user=current_user, account_id=account_id)
+    return await service.delete(user=current_user, identifier=account_id)

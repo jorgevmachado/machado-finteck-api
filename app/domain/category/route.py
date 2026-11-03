@@ -90,11 +90,10 @@ async def find_one(
     category_id: UUID,
     service: Service,
     current_user: CurrentUser,
-) -> Category:
+):
     return await service.find_by(
-        id=category_id,
-        user_id=current_user.id,
-        user_request=current_user.username,
+        filters={"id": category_id},
+        user=current_user,
     )
 
 
@@ -106,7 +105,7 @@ async def update(
     payload: CategoryUpdateSchema,
 ) -> Message:
     return await service.update(
-        category_id=category_id,
+        identifier=category_id,
         payload=payload,
         user=current_user,
     )
@@ -118,4 +117,4 @@ async def delete(
     service: Service,
     current_user: CurrentUser,
 ) -> Message:
-    return await service.delete(user=current_user, category_id=category_id)
+    return await service.delete(user=current_user, identifier=category_id)

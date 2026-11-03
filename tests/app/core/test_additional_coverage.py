@@ -13,15 +13,10 @@ from app.core.exceptions.exceptions import _resolve_status_code
 from app.core.logging import LoggingParams
 from app.core.pagination.schemas import CustomLimitOffsetPage
 from app.core.security import get_current_user, get_password_hash, verify_password
-from app.core.service.base import BaseService
 
 
 class DummySchema(BaseModel):
     id: int
-    name: str
-
-
-class DummyUpdateSchema(BaseModel):
     name: str
 
 
@@ -78,14 +73,6 @@ class TestCacheServiceAdditionalCoverage:
         assert service.cache.set_cache.await_args.args[1]["type"] == "custom-paginate"
 
 
-class DummyRepository:
-    async def find_by(self, **kwargs):
-        return {"id": "1", "name": "old-name"}
-
-    async def update(self, entity):
-        return entity
-
-
 class TestSecurityAndServiceAdditionalCoverage:
     @staticmethod
     def test_password_hash_and_verify_roundtrip():
@@ -109,21 +96,3 @@ class TestSecurityAndServiceAdditionalCoverage:
     @staticmethod
     def test_resolve_status_code_handles_httpx_errors():
         assert _resolve_status_code(httpx.HTTPError("boom")).value == 503
-
-    @staticmethod
-    @pytest.mark.asyncio
-    async def test_base_service_update_supports_dict_entities():
-        service = BaseService(
-            alias="dummy",
-            repository=DummyRepository(),
-            logger_params=LoggingParams(
-                logger=__import__("logging").getLogger(__name__),
-                service="DummyService",
-                operation="dummy",
-            ),
-            schema_class=DummySchema,
-        )
-
-        updated = await service.update("1", DummyUpdateSchema(name="new-name"))
-
-        assert updated["name"] == "new-name"

@@ -1,426 +1,337 @@
-from typing import Annotated, Any
+from __future__ import annotations
 
-from fastapi import Depends, Query
-from fastapi_pagination.ext.sqlalchemy import paginate
-from sqlalchemy import and_, func, select
+import logging
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
+from uuid import UUID
+
+from sqlalchemy import ColumnElement, Select, Uuid, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute, Mapped, RelationshipProperty
+from sqlalchemy.orm.interfaces import ORMOption
+from sqlalchemy.orm.util import object_state
 
-from app.core.database import get_session
 from app.core.pagination import CustomLimitOffsetPage, is_paginate
 from app.core.pagination.pagination import get_limit_offset_params
+from app.models import utcnow
 from app.shared.schemas import FilterPage
 
-Session = Annotated[AsyncSession, Depends(get_session)]
+logger = logging.getLogger(__name__)
+_TRANSACTION_KEY = "app.core.transaction_active"
 
 
-class BaseRepository[ModelT]:
+class RepositoryEntity[OwnerT: UUID | None](Protocol):
+    id: Mapped[UUID]
+    user_id: Mapped[OwnerT]
+
+
+type OwnedEntity = RepositoryEntity[UUID]
+
+
+@dataclass(frozen=True)
+class RelationFilter:
+    relationship: str
+    field: str
+
+
+@dataclass(frozen=True)
+class RangeFilter:
+    field: str
+    operator: Literal["gte", "lte"]
+
+
+class BaseRepository[ModelT: OwnedEntity | RepositoryEntity[UUID | None]]:
     model: type[ModelT]
-    relations: tuple[Any, ...] = ()
-    default_order_by: str | None = None
+    filter_fields: tuple[str, ...] = ("id",)
+    relation_filters: Mapping[str, RelationFilter] = {}
+    range_filters: Mapping[str, RangeFilter] = {}
+    order_fields: tuple[str, ...] = ("id",)
+    default_order_by: str = "id"
+    relations: tuple[ORMOption, ...] = ()
+    soft_delete: bool = False
 
-    def __init__(self, session: Session):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        if self.soft_delete:
+            self._column("deleted_at")
 
-    def _apply_order_by(
-        self, query, page_filter: Annotated[FilterPage, Query()] = None
-    ):
-        order_by = getattr(page_filter, "order_by", None) if page_filter else None
-        if not order_by:
-            order_by = self.default_order_by
-        if order_by is None:
-            return query
-
-        order_path = order_by.strip()
-
-        if not order_path:
-            return query
-
-        path_parts = order_path.split(".")
-        current_model = self.model
-
-        for relation_name in path_parts[:-1]:
-            relation_attr = getattr(current_model, relation_name, None)
-            relation_property = getattr(relation_attr, "property", None)
-
-            if relation_attr is None or relation_property is None:
-                raise ValueError(
-                    f'Invalid default_order_by relation "{relation_name}"'
-                    f" for {current_model.__name__}"
-                )
-
-            if not hasattr(relation_property, "mapper"):
-                raise ValueError(
-                    f'Invalid default_order_by path "{order_path}": "{relation_name}"'
-                    f" is not a relationship"
-                )
-
-            if relation_property.uselist:
-                raise ValueError(
-                    f'Invalid default_order_by path "{order_path}":'
-                    f" collection relationships are not supported"
-                )
-
-            query = query.outerjoin(relation_attr)
-            current_model = relation_property.mapper.class_
-
-        field_name = path_parts[-1]
-        order_attr = getattr(current_model, field_name, None)
-        order_property = getattr(order_attr, "property", None)
-
-        if order_attr is None or order_property is None:
-            raise ValueError(
-                f'Invalid default_order_by field "{field_name}" for {current_model.__name__}'
-            )
-
-        if not hasattr(order_property, "columns"):
-            raise ValueError(
-                f'Invalid default_order_by path "{order_path}": '
-                f"last token must be a mapped column"
-            )
-
-        return query.order_by(order_attr)
-
-    @staticmethod
-    def _extract_relations_filters(
-        raw_filters: dict[str, Any],
-        relation: str,
-    ) -> dict[str, Any]:
-        relations_filters: dict[str, Any] = {}
-
-        for key in list(raw_filters.keys()):
-            value = raw_filters[key]
-            if value is None:
-                continue
-            if "_" not in key or not key.startswith(f"{relation}_"):
-                continue
-            field = key.removeprefix(f"{relation}_").strip()
-            if not field:
-                continue
-
-            relations_filters[field] = value
-            raw_filters.pop(key, None)
-        return relations_filters
-
-    @staticmethod
-    def _resolve_model_attr(current_model, attr_name: str):
-        model_attr = getattr(current_model, attr_name, None)
-        model_property = getattr(model_attr, "property", None)
-        return model_attr, model_property
-
-    @staticmethod
-    def _build_name_predicate(model_attr, model_property, value: Any):
-        if not hasattr(model_property, "mapper"):
-            return None
-
-        related_model = model_property.mapper.class_
-        name_attr = getattr(related_model, "name", None)
-        name_property = getattr(name_attr, "property", None)
-
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
         if (
-            name_attr is None
-            or name_property is None
-            or not hasattr(name_property, "columns")
+            self.session.info.get(_TRANSACTION_KEY)
+            or self.session.in_nested_transaction()
         ):
-            return None
+            raise RuntimeError("Nested experimental transactions are not supported")
+        self.session.info[_TRANSACTION_KEY] = True
+        try:
+            if not self.session.in_transaction():
+                await self.session.begin()
+            yield
+            await self.session.commit()
+        except BaseException:
+            try:
+                await self.session.rollback()
+            except BaseException:
+                logger.exception("Failed to roll back experimental transaction")
+            raise
+        finally:
+            self.session.info.pop(_TRANSACTION_KEY, None)
 
-        if model_property.uselist:
-            return model_attr.any(name_attr == value)
+    def _require_transaction(self) -> None:
+        if not self.session.info.get(_TRANSACTION_KEY):
+            raise RuntimeError("Mutations must run inside transaction()")
 
-        return model_attr.has(name_attr == value)
+    def _check_entity(self, entity: ModelT, user_id: UUID) -> None:
+        self.require_owner(user_id)
+        self._require_transaction()
+        if not isinstance(entity, self.model) or entity.user_id != user_id:
+            raise ValueError("Entity does not belong to the trusted owner")
 
-    def _build_single_token_predicate(self, model_attr, model_property, value: Any):
-        if hasattr(model_property, "columns"):
-            return model_attr == value
-
-        return self._build_name_predicate(model_attr, model_property, value)
-
-    def _build_nested_predicate(
-        self,
-        model_attr,
-        model_property,
-        path_tokens: list[str],
-        value: Any,
-    ):
-        if not hasattr(model_property, "mapper"):
-            return None
-
-        related_model = model_property.mapper.class_
-        nested_predicate = self._build_relation_predicate(
-            related_model,
-            path_tokens[1:],
-            value,
-        )
-
-        if nested_predicate is None:
-            return None
-
-        if model_property.uselist:
-            return model_attr.any(nested_predicate)
-
-        return model_attr.has(nested_predicate)
-
-    def _build_relation_predicate(
-        self, current_model, path_tokens: list[str], value: Any
-    ):
-        if not path_tokens:
-            return None
-
-        model_attr, model_property = self._resolve_model_attr(
-            current_model, path_tokens[0]
-        )
-        if model_attr is None or model_property is None:
-            return None
-
-        if len(path_tokens) == 1:
-            return self._build_single_token_predicate(model_attr, model_property, value)
-
-        return self._build_nested_predicate(
-            model_attr, model_property, path_tokens, value
-        )
-
-    def _apply_relations_filters(
-        self, query, relations_filters: dict[str, Any], relation: str
-    ):
-        if not relations_filters:
-            return query
-
-        relation_attr = getattr(self.model, relation, None)
-        relation_property = getattr(relation_attr, "property", None)
-
-        if relation_attr is None or relation_property is None:
-            return query
-
-        if not hasattr(relation_property, "mapper"):
-            return query
-
-        relation_model = relation_property.mapper.class_
-        valid_columns = set(relation_model.__mapper__.columns.keys())
-
-        predicates = []
-
-        for field, value in relations_filters.items():
-            if value is None:
-                continue
-
-            predicate = self._build_filter_predicate(
-                relation_model=relation_model,
-                field=field,
-                value=value,
-                valid_columns=valid_columns,
+    async def _check_stored_owner(self, entity: ModelT, user_id: UUID) -> None:
+        with self.session.no_autoflush:
+            owner = await self.session.scalar(
+                select(self._column("user_id")).where(self._column("id") == entity.id)
             )
+        if owner != user_id:
+            raise ValueError("Stored entity does not belong to the trusted owner")
 
-            if predicate is not None:
-                predicates.append(predicate)
-
-        if not predicates:
-            return query
-
-        combined_predicate = and_(*predicates)
-
-        if relation_property.uselist:
-            return query.where(relation_attr.any(combined_predicate))
-
-        return query.where(relation_attr.has(combined_predicate))
-
-    def _build_filter_predicate(
-        self,
-        relation_model,
-        field: str,
-        value: Any,
-        valid_columns: set[str],
-    ):
-        path_tokens = field.split("__") if "__" in field else [field]
-        predicate = self._build_relation_predicate(relation_model, path_tokens, value)
-
-        if predicate is not None:
-            return predicate
-
-        if len(path_tokens) == 1:
-            plural_path = [f"{path_tokens[0]}s", "name"]
-            predicate = self._build_relation_predicate(
-                relation_model, plural_path, value
-            )
-            if predicate is not None:
-                return predicate
-
-        if field not in valid_columns:
-            return None
-
-        return getattr(relation_model, field) == value
-
-    async def total(self):
-        query = select(func.count()).select_from(self.model)
-        value = await self.session.scalar(query)
-        return int(value or 0)
-
-    async def save(self, entity: ModelT) -> ModelT:
+    async def save(self, entity: ModelT, *, user_id: UUID) -> ModelT:
+        self._check_entity(entity, user_id)
+        state = object_state(entity)
+        if state.persistent or state.detached:
+            await self._check_stored_owner(entity, user_id)
         self.session.add(entity)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(entity)
         return entity
 
-    async def update(self, entity: ModelT) -> ModelT:
-        entity = await self.session.merge(entity)
-        await self.session.commit()
-        await self.session.refresh(entity)
-        return entity
+    async def update(self, entity: ModelT, *, user_id: UUID) -> ModelT:
+        self._check_entity(entity, user_id)
+        await self._check_stored_owner(entity, user_id)
+        merged = await self.session.merge(entity)
+        await self.session.flush()
+        await self.session.refresh(merged)
+        return merged
 
-    def _resolve_relation_name(self, raw_filters: dict[str, Any]) -> str | None:
-        if not raw_filters:
-            return None
+    async def delete(self, entity: ModelT, *, user_id: UUID) -> None:
+        self._check_entity(entity, user_id)
+        await self._check_stored_owner(entity, user_id)
+        await self._delete(entity)
+        await self.session.flush()
 
-        mapper = getattr(self.model, "__mapper__", None)
-        if mapper is None:
-            return None
-
-        for relation_name in mapper.relationships.keys():
-            prefix = f"{relation_name}_"
-            if any(key.startswith(prefix) for key in raw_filters):
-                return relation_name
-
-        return None
-
-    async def list_paginate(
-        self,
-        query,
-        page_filter: Annotated[FilterPage, Query()],
-        relations_filters: dict[str, Any] = None,
-    ):
-        params = get_limit_offset_params(page_filter)
-
-        if relations_filters:
-            count_query = select(func.count()).select_from(
-                query.order_by(None).subquery()
-            )
-            total = int(await self.session.scalar(count_query) or 0)
-
-            paginated_query = query.limit(params.limit).offset(params.offset)
-            for option in self.relations:
-                paginated_query = paginated_query.options(option)
-
-            paginated_result = await self.session.scalars(paginated_query)
-
-            return CustomLimitOffsetPage.create(
-                items=paginated_result.all(),
-                total=total,
-                params=params,
-            )
-
-        result_paginate = await paginate(self.session, query, params=params)
-
-        if isinstance(result_paginate, CustomLimitOffsetPage):
-            return result_paginate
-
-        total = getattr(result_paginate, "total", None)
-        if total is None and hasattr(result_paginate, "meta"):
-            total = getattr(result_paginate.meta, "total", None)
-
-        return CustomLimitOffsetPage.create(
-            items=result_paginate.items,
-            total=total,
-            params=params,
-        )
-
-    async def list_all(self, page_filter: Annotated[FilterPage, Query()] = None):
-        query = select(self.model)
-        relation: str | None = None
-        relations_filters: dict[str, Any] = {}
-
-        for option in self.relations:
-            query = query.options(option)
-
-        if page_filter is not None:
-            raw_filters = self._prepare_raw_filters(page_filter)
-            relation = self._resolve_relation_name(raw_filters)
-            if relation is not None:
-                relations_filters = self._extract_relations_filters(
-                    raw_filters, relation
-                )
-            query = self._apply_main_filters(query, raw_filters)
-            if relation is not None:
-                query = self._apply_relations_filters(
-                    query, relations_filters, relation
-                )
-
-        query = self._apply_order_by(query, page_filter)
-
-        if page_filter is not None and is_paginate(page_filter):
-            return await self.list_paginate(query, page_filter, relations_filters)
-        result = await self.session.scalars(query)
-        return result.all()
+    async def _delete(self, entity: ModelT) -> None:
+        if self.soft_delete:
+            setattr(entity, "deleted_at", utcnow())
+        else:
+            await self.session.delete(entity)
 
     @staticmethod
-    def _prepare_raw_filters(page_filter: FilterPage) -> dict[str, Any]:
-        raw_filters = page_filter.model_dump(exclude_none=True)
-        raw_filters.pop("offset", None)
-        raw_filters.pop("limit", None)
-        raw_filters.pop("page", None)
-        raw_filters.pop("order", None)
-        raw_filters.pop("order_by", None)
-        raw_filters.pop("clean_cache", None)
-        return raw_filters
+    def require_owner(user_id: UUID) -> None:
+        if not isinstance(user_id, UUID):
+            raise ValueError("A trusted owner UUID is required")
 
-    def _apply_main_filters(self, query, raw_filters: dict[str, Any]):
-        valid_columns = set(self.model.__mapper__.columns.keys())
-        filters = {
-            key: value
-            for key, value in raw_filters.items()
-            if key in valid_columns and value is not None
-        }
+    @staticmethod
+    def _mapped_column(model: type, field: str) -> InstrumentedAttribute[Any]:
+        attribute = getattr(model, field, None)
+        if not isinstance(attribute, InstrumentedAttribute) or not hasattr(
+            attribute.property, "columns"
+        ):
+            raise ValueError(f"Not a mapped column: {field}")
+        return attribute
 
-        if not filters:
-            return query
+    def _column(self, field: str) -> InstrumentedAttribute[Any]:
+        return self._mapped_column(self.model, field)
 
-        conditions = [
-            getattr(self.model, key) == value for key, value in filters.items()
-        ]
-        return query.where(*conditions)
+    def _relation(self, definition: RelationFilter) -> InstrumentedAttribute[Any]:
+        relation = getattr(self.model, definition.relationship, None)
+        if not isinstance(relation, InstrumentedAttribute) or not isinstance(
+            relation.property, RelationshipProperty
+        ):
+            raise ValueError(f"Not a mapped relationship: {definition.relationship}")
+        self._mapped_column(relation.property.mapper.class_, definition.field)
+        return relation
 
-    async def find_by(self, **kwargs) -> ModelT | None:
-        query = select(self.model)
+    @staticmethod
+    def _normalize_filter_value(
+        column: InstrumentedAttribute[Any], value: object
+    ) -> object:
+        column_type = column.property.columns[0].type
+        if (
+            isinstance(column_type, Uuid)
+            and column_type.as_uuid
+            and isinstance(value, str)
+        ):
+            return UUID(value)
+        return value
 
-        has_special_filter = False
-        for relation_name in self.model.__mapper__.relationships.keys():
-            for key in list(kwargs.keys()):
-                if not key.startswith(f"{relation_name}_"):
-                    continue
-
-                field = key.removeprefix(f"{relation_name}_").strip()
-                if not field:
-                    continue
-
-                value = kwargs.pop(key, None)
-                if value is None:
-                    continue
-
-                predicate = self._build_relation_predicate(
-                    self.model, [relation_name, field], value
+    def validate_filters(
+        self, *, user_id: UUID, filters: Mapping[str, object]
+    ) -> dict[str, object]:
+        self.require_owner(user_id)
+        criteria = {}
+        for field, value in filters.items():
+            if field == "user_id":
+                raise ValueError(f"Unsupported filter: {field}")
+            if field in self.relation_filters:
+                definition = self.relation_filters[field]
+                relation = self._relation(definition)
+                column = self._mapped_column(
+                    relation.property.mapper.class_, definition.field
                 )
-                if predicate is not None:
-                    query = query.where(predicate)
-                    has_special_filter = True
+            elif field in self.range_filters:
+                definition = self.range_filters[field]
+                if definition.operator not in ("gte", "lte"):
+                    raise ValueError(
+                        f"Unsupported range operator: {definition.operator}"
+                    )
+                column = self._column(definition.field)
+            elif field in self.filter_fields:
+                column = self._column(field)
+            else:
+                raise ValueError(f"Unsupported filter: {field}")
+            criteria[field] = self._normalize_filter_value(column, value)
+        return criteria
 
-        valid_columns = set(self.model.__mapper__.columns.keys())
-        original_kwargs = kwargs.copy()
-        filters = {
-            k: v for k, v in kwargs.items() if k in valid_columns and v is not None
-        }
+    def prepare_lookup(
+        self, *, user_id: UUID, filters: Mapping[str, object]
+    ) -> dict[str, object]:
+        criteria = self.validate_filters(user_id=user_id, filters=filters)
+        if not criteria:
+            raise ValueError("Lookup requires at least one resource criterion")
+        return criteria
 
-        if not filters and not has_special_filter:
-            return None
+    def prepare_list(
+        self, *, user_id: UUID, page_filter: FilterPage | None
+    ) -> tuple[dict[str, object], str]:
+        raw = page_filter.model_dump(exclude_none=True) if page_filter else {}
+        order_by = raw.pop("order_by", self.default_order_by)
+        self._order_direction(raw.pop("order", "asc"))
+        for field in ("page", "offset", "limit", "clean_cache"):
+            raw.pop(field, None)
+        criteria = self.validate_filters(user_id=user_id, filters=raw)
+        if order_by not in self.order_fields:
+            raise ValueError(f"Unsupported ordering: {order_by}")
+        self._column(order_by)
+        return criteria, order_by
 
-        ignored_filters = {
-            k: v
-            for k, v in original_kwargs.items()
-            if k not in valid_columns and v is not None
-        }
-        if ignored_filters:
-            return None
+    @staticmethod
+    def _order_direction(order: object) -> Literal["asc", "desc"]:
+        if order not in ("asc", "desc"):
+            raise ValueError(f"Unsupported order direction: {order}")
+        return "desc" if order == "desc" else "asc"
 
-        for option in self.relations:
-            query = query.options(option)
+    def _visibility(self) -> tuple[ColumnElement[bool], ...]:
+        if self.soft_delete:
+            return (self._column("deleted_at").is_(None),)
+        return ()
 
-        if filters:
-            query = query.filter_by(**filters)
+    def _build_query(self, *, user_id: UUID) -> Select[ModelT]:
+        self.require_owner(user_id)
+        return select(self.model).where(
+            self._column("user_id") == user_id,
+            *self._visibility(),
+        )
 
-        return await self.session.scalar(query)
+    def _build_filter(
+        self, query: Select[ModelT], filters: Mapping[str, object]
+    ) -> Select[ModelT]:
+        for field, value in filters.items():
+            if field in self.relation_filters:
+                query = query.where(self._relation_predicate(field, value))
+            elif field in self.range_filters:
+                definition = self.range_filters[field]
+                column = self._column(definition.field)
+                predicate = (
+                    column >= value if definition.operator == "gte" else column <= value
+                )
+                query = query.where(predicate)
+            else:
+                query = query.where(self._column(field) == value)
+        return query
+
+    def _relation_predicate(self, field: str, value: object) -> ColumnElement[bool]:
+        definition = self.relation_filters[field]
+        relation = self._relation(definition)
+        column = self._mapped_column(relation.property.mapper.class_, definition.field)
+        predicate = column == value
+        return (
+            relation.any(predicate)
+            if relation.property.uselist
+            else relation.has(predicate)
+        )
+
+    def _load_relations(self, query: Select[ModelT]) -> Select[ModelT]:
+        return query.options(*self.relations)
+
+    def _order_by(
+        self, query: Select[ModelT], *, order_by: str, order: str
+    ) -> Select[ModelT]:
+        fields = [order_by] if order_by == "id" else [order_by, "id"]
+        return query.order_by(
+            *(
+                self._column(field).desc()
+                if order == "desc"
+                else self._column(field).asc()
+                for field in fields
+            )
+        )
+
+    async def _execute_list(self, query: Select[ModelT]) -> list[ModelT]:
+        return list((await self.session.scalars(query)).unique().all())
+
+    async def _count_query(self, query: Select[ModelT]) -> int:
+        total = await self.session.scalar(
+            select(func.count()).select_from(query.order_by(None).subquery())
+        )
+        return int(total or 0)
+
+    async def count(
+        self, *, user_id: UUID, filters: Mapping[str, object] | None = None
+    ) -> int:
+        criteria = self.validate_filters(
+            user_id=user_id, filters={} if filters is None else filters
+        )
+        query = self._build_query(user_id=user_id)
+        query = self._build_filter(query, criteria)
+        return await self._count_query(query)
+
+    async def _list_paginate(
+        self,
+        query: Select[ModelT],
+        *,
+        page_filter: FilterPage,
+    ) -> CustomLimitOffsetPage[ModelT]:
+        params = get_limit_offset_params(page_filter)
+        total = await self._count_query(query)
+        items = await self._execute_list(
+            query.limit(params.limit).offset(params.offset)
+        )
+        return CustomLimitOffsetPage.create(items, params=params, total=total)
+
+    async def list_all(
+        self, *, user_id: UUID, page_filter: FilterPage | None = None
+    ) -> list[ModelT] | CustomLimitOffsetPage[ModelT]:
+        filters, order_by = self.prepare_list(user_id=user_id, page_filter=page_filter)
+        query = self._build_query(user_id=user_id)
+        query = self._build_filter(query, filters)
+        query = self._load_relations(query)
+        raw = page_filter.model_dump(exclude_none=True) if page_filter else {}
+        query = self._order_by(
+            query,
+            order_by=order_by,
+            order=self._order_direction(raw.get("order", "asc")),
+        )
+        if page_filter is not None and is_paginate(page_filter):
+            return await self._list_paginate(query, page_filter=page_filter)
+        return await self._execute_list(query)
+
+    async def find_by(
+        self, *, user_id: UUID, filters: Mapping[str, object]
+    ) -> ModelT | None:
+        criteria = self.prepare_lookup(user_id=user_id, filters=filters)
+        query = self._build_query(user_id=user_id)
+        query = self._build_filter(query, criteria)
+        query = self._load_relations(query)
+        return (await self.session.scalars(query)).unique().one_or_none()

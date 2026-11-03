@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from uuid import UUID, uuid4
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, Enum as SAEnum, Boolean, Integer
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database.base import table_registry
+from app.core.database.base import table_registry, default_lazy
 
 from app.models import utcnow
 from app.models.credit_card.enums import CreditCardBrandEnum
 
+if TYPE_CHECKING:
+    from app.models import Transaction
 
 @table_registry.mapped_as_dataclass
 class CreditCard:
@@ -75,3 +79,12 @@ class CreditCard:
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None, init=False
     )
+
+    transactions: Mapped[list["Transaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="credit_card",
+    )
+

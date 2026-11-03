@@ -297,7 +297,9 @@ async def test_service_reads_current_owned_rule_and_blocks_missing_profile(user)
         entity.id, "Banco Recebedor: Banco Novo\n", user, identified=False
     )
     assert result.value == "Banco Novo"
-    repository.find_by.assert_awaited_once_with(id=entity.id, user_id=user.id)
+    repository.find_by.assert_awaited_once_with(
+        filters={"id": entity.id}, user_id=user.id
+    )
     entity.field_rules[0].configuration["identified_value"] = "Nome editado"
     result = await service.extract_source_institution(
         entity.id, "", user, identified=True

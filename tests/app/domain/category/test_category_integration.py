@@ -162,9 +162,9 @@ async def test_http_seed_failure_rolls_back_all_flushed_aggregates(
     original_save = CategoryRepository.save
     writes = 0
 
-    async def failing_save(repository, entity, reconciliation=None):
+    async def failing_save(repository, entity, **kwargs):
         nonlocal writes
-        result = await original_save(repository, entity, reconciliation)
+        result = await original_save(repository, entity, **kwargs)
         writes += 1
         if writes == 3:
             if name_conflict:
@@ -619,13 +619,15 @@ async def test_listing_loads_children_in_batches_and_counts_root_categories(
         async with category_session_factory() as session:
             result = await CategoryRepository(session).list_all(
                 # Limit without page/offset deliberately remains a plain list.
-                FilterPage.build(user_id=owner.id, limit=12)
+                user_id=owner.id,
+                page_filter=FilterPage.build(limit=12),
             )
             assert len(result) == 3
             assert all(len(category.subcategories) == 2 for category in result)
 
             paged = await CategoryRepository(session).list_all(
-                FilterPage.build(user_id=owner.id, page=1, limit=2)
+                user_id=owner.id,
+                page_filter=FilterPage.build(page=1, limit=2),
             )
             assert paged.meta.total == 3
             assert len(paged.items) == 2
@@ -637,7 +639,15 @@ async def test_listing_loads_children_in_batches_and_counts_root_categories(
         for statement in statements
         if statement.lstrip().upper().startswith("SELECT")
     ]
-    assert len(select_statements) == 5
+    transaction_statements = [
+        statement for statement in select_statements if "FROM transactions" in statement
+    ]
+    assert len(transaction_statements) == 2
+    assert all(
+        "transactions.subcategory_id IN (" in statement
+        for statement in transaction_statements
+    )
+    assert len(select_statements) == 7
     assert "FROM categories" in select_statements[0]
     assert all("FROM payments" not in statement for statement in select_statements)
 

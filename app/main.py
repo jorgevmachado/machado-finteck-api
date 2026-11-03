@@ -15,6 +15,7 @@ from app.domain.category.route import router as category_router
 from app.domain.beneficiary.route import router as beneficiary_router
 from app.domain.institution.route import router as institution_router
 from app.domain.receipt.route import router as receipt_router
+from app.domain.transaction.route import router as transaction_router
 
 
 configure_logging()
@@ -30,6 +31,7 @@ app.include_router(category_router, prefix="/categories", tags=["Categories"])
 app.include_router(beneficiary_router, prefix="/beneficiaries", tags=["Beneficiaries"])
 app.include_router(institution_router, prefix="/institutions", tags=["Institutions"])
 app.include_router(receipt_router, prefix="/receipts", tags=["Receipts"])
+app.include_router(transaction_router, prefix="/transactions", tags=["Transactions"])
 @app.get('/', status_code=HTTPStatus.OK, response_model=Message)
 def read_root():
     return {'message': 'Hello World!'}

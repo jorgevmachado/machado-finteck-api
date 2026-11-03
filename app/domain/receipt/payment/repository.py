@@ -11,7 +11,7 @@ from sqlalchemy.orm import aliased, selectinload
 from fastapi import Query
 
 from app.core.pagination import is_paginate
-from app.core.repository.base import BaseRepository
+from app.core.repository import BaseRepository
 from app.models import Beneficiary, Institution, Payment, Subcategory, Payer
 from app.shared.schemas import FilterPage
 from app.shared.utils.string import text_strip, to_snake_case
@@ -19,10 +19,14 @@ from app.shared.utils.string import text_strip, to_snake_case
 
 class PaymentRepository(BaseRepository[Payment]):
     model = Payment
-
-    async def delete(self, entity: Payment) -> None:
-        await self.session.delete(entity)
-        await self.session.commit()
+    filter_fields = ("id", "receipt_id")
+    relations = (
+        selectinload(Payment.beneficiary),
+        selectinload(Payment.subcategory),
+        selectinload(Payment.payer),
+        selectinload(Payment.source_institution),
+        selectinload(Payment.destination_institution),
+    )
 
     @staticmethod
     def _get_name_code(name: str) -> str:
@@ -38,7 +42,7 @@ class PaymentRepository(BaseRepository[Payment]):
             case _:
                 return Payment.created_at
 
-    def _order_by(
+    def _order_payments(
         self,
         query,
         page_filter: Annotated[FilterPage, Query()] | None = None,
@@ -47,13 +51,13 @@ class PaymentRepository(BaseRepository[Payment]):
         order_by = getattr(page_filter, "order_by", None) if page_filter else None
 
         if order is None and order_by is None:
-            return self._apply_order_by(query=query, page_filter=page_filter)
+            return query
 
         column = self._get_order_column(order_by)
         query = query.order_by(asc(column) if order == "asc" else desc(column))
         return query
 
-    def _build_filter(
+    def _filter_payments(
         self,
         query,
         user_id: UUID,
@@ -66,6 +70,7 @@ class PaymentRepository(BaseRepository[Payment]):
             "destination_institution": Institution,
             "source_institution": Institution,
         }
+        self.require_owner(user_id)
         query = query.where(Payment.user_id == user_id)
         if page_filter is None:
             return query
@@ -104,19 +109,12 @@ class PaymentRepository(BaseRepository[Payment]):
     async def list(
         self, user_id: UUID, page_filter: Annotated[FilterPage, Query()] | None = None
     ):
-        query = select(self.model).options(
-            selectinload(Payment.beneficiary),
-            selectinload(Payment.subcategory),
-            selectinload(Payment.payer),
-            selectinload(Payment.source_institution),
-            selectinload(Payment.destination_institution),
-        )
-        query = self._build_filter(query, user_id, page_filter)
-        query = self._order_by(query, page_filter)
+        query = self._load_relations(select(self.model))
+        query = self._filter_payments(query, user_id, page_filter)
+        query = self._order_payments(query, page_filter)
         if page_filter is not None and is_paginate(page_filter):
-            return await self.list_paginate(query, page_filter)
-        result = await self.session.scalars(query)
-        return result.all()
+            return await self._list_paginate(query, page_filter=page_filter)
+        return await self._execute_list(query)
 
     async def summary_count(
         self, user_id: UUID, page_filter: Annotated[FilterPage, Query()] | None = None
@@ -129,7 +127,7 @@ class PaymentRepository(BaseRepository[Payment]):
             selectinload(Payment.destination_institution),
         )
         page_filter = self._only_filter_date(page_filter)
-        query = self._build_filter(query, user_id, page_filter)
+        query = self._filter_payments(query, user_id, page_filter)
         result = await self.session.scalars(query)
         return {"count": len(result.all())}
 
@@ -144,7 +142,7 @@ class PaymentRepository(BaseRepository[Payment]):
             selectinload(Payment.destination_institution),
         )
         page_filter = self._only_filter_date(page_filter)
-        query = self._build_filter(query, user_id, page_filter)
+        query = self._filter_payments(query, user_id, page_filter)
         result = await self.session.scalars(query)
         return {"total": sum(payment.amount for payment in result.all())}
 
@@ -165,7 +163,7 @@ class PaymentRepository(BaseRepository[Payment]):
         direction = asc if order_by == "asc" else desc
         query = query.order_by(direction(Payment.amount)).limit(1)
         page_filter = self._only_filter_date(page_filter)
-        query = self._build_filter(query, user_id, page_filter)
+        query = self._filter_payments(query, user_id, page_filter)
         result = await self.session.scalars(query)
         return result.first()
 
@@ -189,7 +187,7 @@ class PaymentRepository(BaseRepository[Payment]):
         )
 
         page_filter = self._only_filter_date(page_filter)
-        query = self._build_filter(query, user_id, page_filter)
+        query = self._filter_payments(query, user_id, page_filter)
         result = await self.session.scalars(query)
         return {
             "total": sum(payment.amount for payment in result.all()),
@@ -207,6 +205,7 @@ class PaymentRepository(BaseRepository[Payment]):
         subcategory_id: UUID | None = None,
         beneficiary_id: UUID | None = None,
     ):
+        self.require_owner(user_id)
         query = query.where(
             Payment.user_id == user_id,
             Payment.payment_date >= start_date,

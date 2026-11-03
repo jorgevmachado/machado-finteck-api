@@ -30,7 +30,7 @@ async def create(
     current_user: CurrentUser,
     payload: ReceiptRulesCreateSchema,
 ) -> ReceiptRulesSchema:
-    return await service.create(user=current_user, payload=payload)
+    return await service.create_profile(user=current_user, payload=payload)
 
 @router.get(
     "",
@@ -39,7 +39,7 @@ async def create(
 async def list_rules(
     service: Service, current_user: CurrentUser, page_filter: PageFilter
 ):
-    return await service.list_all(page_filter=page_filter, user=current_user)
+    return await service.list_profiles(page_filter=page_filter, user=current_user)
 
 @router.post("/seed", response_model=ReceiptRulesSeedSchema, status_code=HTTPStatus.CREATED)
 async def seed(
@@ -52,7 +52,7 @@ async def seed(
 async def find_one(
     profile_id: UUID, service: Service, current_user: CurrentUser
 ) -> ReceiptRulesSchema:
-    return await service.find_by(profile_id=profile_id, user=current_user)
+    return await service.find_profile(profile_id=profile_id, user=current_user)
 
 @router.put("/{profile_id}", response_model=Message)
 async def update(
@@ -61,7 +61,7 @@ async def update(
     current_user: CurrentUser,
     payload: ReceiptRulesUpdateSchema,
 ) -> Message:
-    return await service.update(
+    return await service.update_profile(
         profile_id=profile_id, payload=payload, user=current_user
     )
 
@@ -69,4 +69,4 @@ async def update(
 async def delete(
     profile_id: UUID, service: Service, current_user: CurrentUser
 ) -> Message:
-    return await service.delete(profile_id=profile_id, user=current_user)
+    return await service.delete_profile(profile_id=profile_id, user=current_user)
