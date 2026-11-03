@@ -15,6 +15,12 @@ from app.models.receipt import (
     Payment
 )
 
+from app.models.transaction import (
+    TransactionDirectionEnum,
+    TransactionStatusEnum,
+    Transaction
+)
+
 __all__ = [
     "User",
     "Role",
@@ -36,5 +42,8 @@ __all__ = [
     "ReceiptStatusEnum",
     "Receipt",
     "Payment",
+    "TransactionDirectionEnum",
+    "TransactionStatusEnum",
+    "Transaction",
     "utcnow",
 ]

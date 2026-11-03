@@ -639,7 +639,15 @@ async def test_listing_loads_children_in_batches_and_counts_root_categories(
         for statement in statements
         if statement.lstrip().upper().startswith("SELECT")
     ]
-    assert len(select_statements) == 5
+    transaction_statements = [
+        statement for statement in select_statements if "FROM transactions" in statement
+    ]
+    assert len(transaction_statements) == 2
+    assert all(
+        "transactions.subcategory_id IN (" in statement
+        for statement in transaction_statements
+    )
+    assert len(select_statements) == 7
     assert "FROM categories" in select_statements[0]
     assert all("FROM payments" not in statement for statement in select_statements)
 
