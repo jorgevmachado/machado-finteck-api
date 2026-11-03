@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.transaction.schema import TransactionCreateSchema
 from app.domain.transaction.service import TransactionService
-from app.models import Transaction
+from app.domain.transaction.series.schema import TransactionSeriesCreateSchema
+from app.domain.transaction.series.service import TransactionSeriesService
+from app.models import Transaction, TransactionSeries
 
 
 @pytest.fixture
@@ -79,5 +81,61 @@ def transaction_response(transaction_entity):
             "type": "CHECKING",
             "is_active": True,
             "created_at": transaction_entity.created_at.isoformat(),
+        },
+    }
+
+
+@pytest.fixture
+def series_payload():
+    return TransactionSeriesCreateSchema(
+        kind="CLOSED",
+        name="Subscription",
+        value="39.90",
+        direction="OUT",
+        account_id=uuid4(),
+        start_date="2026-01-10",
+        end_date="2026-12-10",
+        frequency_unit="MONTH",
+        frequency_interval=1,
+        day_of_month=10,
+        installments=12,
+    )
+
+
+@pytest.fixture
+def series_entity(user, series_payload):
+    return TransactionSeries(user_id=user.id, **series_payload.model_dump())
+
+
+@pytest.fixture
+def series_service(transaction_repository, series_entity):
+    transaction_repository.find_by.return_value = series_entity
+    transaction_repository.list_all.return_value = [series_entity]
+    service = TransactionSeriesService(transaction_repository)
+    service._invalidate_cache = AsyncMock()
+    return service
+
+
+@pytest.fixture
+def series_response(series_entity):
+    return {
+        "id": str(series_entity.id),
+        "name": series_entity.name,
+        "kind": "CLOSED",
+        "value": "39.90",
+        "direction": "OUT",
+        "start_date": "2026-01-10",
+        "end_date": "2026-12-10",
+        "frequency_unit": "MONTH",
+        "frequency_interval": 1,
+        "day_of_month": 10,
+        "installments": 12,
+        "created_at": series_entity.created_at.isoformat(),
+        "account": {
+            "id": str(series_entity.account_id),
+            "name": "Main account",
+            "type": "CHECKING",
+            "is_active": True,
+            "created_at": series_entity.created_at.isoformat(),
         },
     }

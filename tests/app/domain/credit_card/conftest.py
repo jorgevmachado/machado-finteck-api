@@ -13,7 +13,13 @@ from app.domain.credit_card.schema import (
     CreditCardUpdateSchema,
 )
 from app.domain.credit_card.service import CreditCardService
-from app.models import CreditCard, Transaction, utcnow, CreditCardBrandEnum
+from app.models import (
+    CreditCard,
+    Transaction,
+    TransactionSeries,
+    utcnow,
+    CreditCardBrandEnum,
+)
 from tests.conftest import FakeRedis
 
 
@@ -41,7 +47,12 @@ async def credit_card_session():
     async with engine.begin() as connection:
         await connection.run_sync(
             lambda sync: table_registry.metadata.create_all(
-                sync, tables=[CreditCard.__table__, Transaction.__table__]
+                sync,
+                tables=[
+                    CreditCard.__table__,
+                    Transaction.__table__,
+                    TransactionSeries.__table__,
+                ],
             )
         )
     async with AsyncSession(engine, expire_on_commit=False) as session:

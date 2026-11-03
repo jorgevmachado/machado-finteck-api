@@ -14,7 +14,7 @@ from app.models import utcnow
 from app.models.account.enums import AccountTypeEnum
 
 if TYPE_CHECKING:
-    from app.models import Transaction
+    from app.models import Transaction, TransactionSeries
 
 @table_registry.mapped_as_dataclass
 class Account:
@@ -78,6 +78,14 @@ class Account:
     )
 
     transactions: Mapped[list["Transaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="account",
+    )
+
+    transaction_series: Mapped[list["TransactionSeries"]] = relationship(
         lazy=default_lazy,
         default_factory=list,
         init=False,

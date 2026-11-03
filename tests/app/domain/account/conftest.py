@@ -10,7 +10,7 @@ from app.core.cache.manager import CacheManager
 from app.core.database.base import table_registry
 from app.domain.account.schema import AccountCreateSchema, AccountUpdateSchema
 from app.domain.account.service import AccountService
-from app.models import Account, Transaction, utcnow, AccountTypeEnum
+from app.models import Account, Transaction, TransactionSeries, utcnow, AccountTypeEnum
 from tests.conftest import FakeRedis
 
 
@@ -38,7 +38,12 @@ async def account_session():
     async with engine.begin() as connection:
         await connection.run_sync(
             lambda sync: table_registry.metadata.create_all(
-                sync, tables=[Account.__table__, Transaction.__table__]
+                sync,
+                tables=[
+                    Account.__table__,
+                    Transaction.__table__,
+                    TransactionSeries.__table__,
+                ],
             )
         )
     async with AsyncSession(engine, expire_on_commit=False) as session:

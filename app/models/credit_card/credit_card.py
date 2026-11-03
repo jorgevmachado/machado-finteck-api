@@ -14,7 +14,7 @@ from app.models import utcnow
 from app.models.credit_card.enums import CreditCardBrandEnum
 
 if TYPE_CHECKING:
-    from app.models import Transaction
+    from app.models import Transaction, TransactionSeries
 
 @table_registry.mapped_as_dataclass
 class CreditCard:
@@ -87,4 +87,13 @@ class CreditCard:
         repr=False,
         back_populates="credit_card",
     )
+
+    transaction_series: Mapped[list["TransactionSeries"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="credit_card",
+    )
+
 

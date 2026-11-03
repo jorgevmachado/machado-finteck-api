@@ -22,7 +22,7 @@ from app.models.common import utcnow
 
 if TYPE_CHECKING:
     from app.models.category.category import Category
-    from app.models import Payment, Transaction
+    from app.models import Payment, Transaction, TransactionSeries
 
 
 @table_registry.mapped_as_dataclass
@@ -99,6 +99,14 @@ class Subcategory:
     )
 
     transactions: Mapped[list["Transaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="subcategory",
+    )
+
+    transaction_series: Mapped[list["TransactionSeries"]] = relationship(
         lazy=default_lazy,
         default_factory=list,
         init=False,
