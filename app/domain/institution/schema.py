@@ -40,3 +40,8 @@ class InstitutionUpdateSchema(BaseModel):
         if not value:
             raise ValueError("Field cannot be empty")
         return value
+
+
+class InstitutionSeedSchema(BaseModel):
+    created: int
+    skipped: int

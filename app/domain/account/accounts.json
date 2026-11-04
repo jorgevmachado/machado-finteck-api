@@ -1,0 +1,100 @@
+[
+  {
+    "name": "Conta Corrente Itaú",
+    "type": "CHECKING",
+    "financial_institution": "Itaú Unibanco",
+    "icon": "landmark",
+    "color": "#EC7000"
+  },
+  {
+    "name": "Poupança Caixa",
+    "type": "SAVINGS",
+    "financial_institution": "Caixa Econômica Federal",
+    "icon": "piggy-bank",
+    "color": "#005CA9"
+  },
+  {
+    "name": "Carteira",
+    "type": "CASH",
+    "financial_institution": "Dinheiro em espécie",
+    "icon": "wallet",
+    "color": "#6B7280"
+  },
+  {
+    "name": "Nubank",
+    "type": "CHECKING",
+    "financial_institution": "Nu Pagamentos",
+    "icon": "smartphone",
+    "color": "#820AD1"
+  },
+  {
+    "name": "Conta Corrente Bradesco",
+    "type": "CHECKING",
+    "financial_institution": "Banco Bradesco",
+    "icon": "building-2",
+    "color": "#CC092F"
+  },
+  {
+    "name": "Conta Santander",
+    "type": "CHECKING",
+    "financial_institution": "Banco Santander",
+    "icon": "landmark",
+    "color": "#EC0000"
+  },
+  {
+    "name": "Poupança Banco do Brasil",
+    "type": "SAVINGS",
+    "financial_institution": "Banco do Brasil",
+    "icon": "piggy-bank",
+    "color": "#FAE128"
+  },
+  {
+    "name": "Conta Inter",
+    "type": "CHECKING",
+    "financial_institution": "Banco Inter",
+    "icon": "smartphone",
+    "color": "#FF7A00"
+  },
+  {
+    "name": "Investimentos XP",
+    "type": "INVESTMENT",
+    "financial_institution": "XP Investimentos",
+    "icon": "trending-up",
+    "color": "#111827"
+  },
+  {
+    "name": "Tesouro Direto",
+    "type": "INVESTMENT",
+    "financial_institution": "Tesouro Nacional",
+    "icon": "coins",
+    "color": "#0F766E"
+  },
+  {
+    "name": "Conta C6 Bank",
+    "type": "CHECKING",
+    "financial_institution": "C6 Bank",
+    "icon": "building",
+    "color": "#242424"
+  },
+  {
+    "name": "Reserva de Emergência",
+    "type": "SAVINGS",
+    "financial_institution": "Nubank",
+    "icon": "shield-check",
+    "color": "#16A34A"
+  },
+  {
+    "name": "Vale-Refeição",
+    "type": "OTHER",
+    "financial_institution": "Alelo",
+    "icon": "utensils",
+    "color": "#00A868"
+  },
+  {
+    "name": "PicPay",
+    "type": "CHECKING",
+    "financial_institution": "PicPay",
+    "icon": "qr-code",
+    "color": "#21C25E"
+  }
+]

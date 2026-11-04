@@ -29,6 +29,21 @@ class CategoryRepository(BaseRepository[Category]):
     filter_fields = ("id", "name")
     relations = (_ACTIVE_SUBCATEGORIES,)
 
+    async def count_subcategories(self, *, user_id: UUID) -> int:
+        self.require_owner(user_id)
+        return int(
+            await self.session.scalar(
+                select(func.count(Subcategory.id))
+                .join(Category, Subcategory.category_id == Category.id)
+                .where(
+                    Category.user_id == user_id,
+                    Category.deleted_at.is_(None),
+                    Subcategory.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
+
     async def find_by(
         self,
         *,

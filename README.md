@@ -43,6 +43,52 @@ RESTful API, built with FastAPI and async SQLAlchemy.
 
 Includes JWT authentication, pagination, caching support, and a layered architecture (domain, service, repository) designed for scalability and maintainability.
 
+### Seed completo
+
+`POST /seed` executa os seeds sequencialmente: account, credit_card, institution,
+category (incluindo suas subcategories) e transaction (incluindo series e
+agendamentos). A rota usa a mesma autenticacao JWT das demais rotas e repassa
+o usuario aos servicos, sem checagem propria de admin. A regra de admin continua
+no TransactionService: um usuario comum pode ter os seeds anteriores gravados
+antes de receber `403` na etapa de transacoes.
+
+O corpo JSON e obrigatorio. Os parametros exclusivos de
+[transaction seed](app/domain/transaction/README.md) ficam dentro do objeto
+`transactions`, incluindo a seed numerica. Nesse objeto, `one_offs` define a
+quantidade de transacoes avulsas, em vez de repetir o nome `transactions`.
+`{}` ou `{"transactions": {}}`
+usa os padroes. O formato plano anterior nao e mais aceito em `POST /seed`;
+`POST /transactions/seed` continua recebendo seus parametros diretamente.
+
+```bash
+curl -X POST http://localhost:8000/seed \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"transactions":{"one_offs":20,"recurrences":2,"installment_plans":2,"months":3,"seed":42}}'
+```
+
+Resposta `200` com quantidades **criadas nesta execucao**, nao totais existentes
+(valores ilustrativos):
+
+```json
+{
+  "account": 14,
+  "credit_card": 12,
+  "institution": 13,
+  "category": 14,
+  "subcategory": 80,
+  "transaction": 20,
+  "transaction_series": 4,
+  "scheduled_transaction": 30
+}
+```
+
+Subcategories sao criadas pelo agregado category; nao ha seed separado.
+Defaults existentes sao ignorados, mas transacoes sao adicionadas novamente.
+Cada servico confirma sua propria transacao. Uma falha interrompe a sequencia,
+retorna o erro do servico e preserva as etapas ja confirmadas; nao ha rollback
+global nem resposta parcial de sucesso. Aplique `make migrate` antes do uso.
+
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 

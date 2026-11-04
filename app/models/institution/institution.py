@@ -30,7 +30,7 @@ class Institution:
     # Required fields (no defaults) — must come first in __init__
     name: Mapped[str] = mapped_column(String, nullable=False)
 
-    name_code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    name_code: Mapped[str] = mapped_column(String, nullable=False)
 
     # Auto-generated / server-managed — excluded from __init__
     id: Mapped[UUID] = mapped_column(

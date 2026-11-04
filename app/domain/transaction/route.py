@@ -12,18 +12,26 @@ from app.core.security import get_current_user
 from app.domain.transaction.schema import (
     TransactionSchema,
     TransactionCreateSchema,
-    TransactionUpdateSchema
+    TransactionUpdateSchema,
+    TransactionSeedRequestSchema,
+    TransactionSeedSchema,
 )
 from app.domain.transaction.service import TransactionService
 from app.models import User, TransactionDirectionEnum, TransactionStatusEnum
 from app.shared.schemas import FilterPage, Message
 
 from app.domain.transaction.series.route import router as transaction_series_router
-from app.domain.transaction.scheduled.route import router as scheduled_transaction_router
+from app.domain.transaction.scheduled.route import (
+    router as scheduled_transaction_router,
+)
 
 router = APIRouter()
-router.include_router(transaction_series_router, prefix="/series", tags=["Transaction Series"])
-router.include_router(scheduled_transaction_router, prefix="/scheduled", tags=["Scheduled Transactions"])
+router.include_router(
+    transaction_series_router, prefix="/series", tags=["Transaction Series"]
+)
+router.include_router(
+    scheduled_transaction_router, prefix="/scheduled", tags=["Scheduled Transactions"]
+)
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
@@ -54,6 +62,17 @@ def transaction_filter(
 
 Service = Annotated[TransactionService, Depends(transaction_service)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+@router.post(
+    "/seed", response_model=TransactionSeedSchema, status_code=HTTPStatus.CREATED
+)
+async def seed(
+    service: Service,
+    current_user: CurrentUser,
+    payload: TransactionSeedRequestSchema,
+):
+    return await service.seed(user=current_user, payload=payload)
 
 
 @router.post("", response_model=TransactionSchema, status_code=HTTPStatus.CREATED)

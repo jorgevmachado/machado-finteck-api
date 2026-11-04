@@ -1,0 +1,98 @@
+[
+  {
+    "name": "Nubank Ultravioleta",
+    "brand": "MASTERCARD",
+    "color": "#820AD1",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Itaú Visa Infinite",
+    "brand": "VISA",
+    "color": "#EC7000",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Bradesco Visa Gold",
+    "brand": "VISA",
+    "color": "#CC092F",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Santander Mastercard Platinum",
+    "brand": "MASTERCARD",
+    "color": "#EC0000",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Elo Nanquim Banco do Brasil",
+    "brand": "ELO",
+    "color": "#FAE128",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Inter Mastercard Gold",
+    "brand": "MASTERCARD",
+    "color": "#FF7A00",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "C6 Carbon",
+    "brand": "MASTERCARD",
+    "color": "#242424",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "American Express Green",
+    "brand": "AMEX",
+    "color": "#2E7D5B",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Hipercard Internacional",
+    "brand": "HIPERCARD",
+    "color": "#B3131B",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Diners Club Elite",
+    "brand": "DINERS",
+    "color": "#1B3A6B",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Caixa Elo Mais",
+    "brand": "ELO",
+    "color": "#005CA9",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  },
+  {
+    "name": "Porto Seguro Visa Platinum",
+    "brand": "VISA",
+    "color": "#0055A5",
+    "limit": 5000,
+    "due_day": 1,
+    "closing_day": 10
+  }
+]

@@ -14,11 +14,58 @@ from app.domain.institution.schema import (
     InstitutionUpdateSchema,
 )
 from app.domain.institution.service import InstitutionService
+from app.domain.institution.seeds import load_seeds_institutions
 from app.models import Institution
 from app.shared.schemas import FilterPage, Message
 from app.core.service import BaseService
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_seed_defaults_is_normalized_owner_scoped_and_repeatable(
+    service, user, institution_cache
+):
+    catalog = load_seeds_institutions()
+    original_name = catalog[0].name.lower()
+    existing = await service.create(user, InstitutionCreateSchema(name=original_name))
+    existing_id = existing.id
+    await service.list_all_cached(None, user)
+    assert institution_cache._data
+    result = await service.seed_defaults(user)
+    assert result.created == len(catalog) - 1
+    assert result.skipped == 1
+    assert institution_cache._data == {}
+    assert (await service.find_one(existing_id, user)).name == original_name
+    repeated = await service.seed_defaults(user)
+    assert repeated.created == 0
+    assert repeated.skipped == len(catalog)
+    other = SimpleNamespace(id=uuid4(), username="other")
+    assert (await service.seed_defaults(other)).created == len(catalog)
+    own = await service.list_all(None, user)
+    assert len(own) == len(catalog)
+    assert all(item.user_id == user.id for item in own)
+
+
+async def test_seed_defaults_rolls_back_partial_writes(service, user):
+    save = service.repository.save
+    calls = 0
+
+    async def failing_save(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("seed failure")
+        return await save(*args, **kwargs)
+
+    with (
+        patch.object(service.repository, "save", side_effect=failing_save),
+        patch.object(service, "_invalidate_cache", new=AsyncMock()) as invalidate,
+        pytest.raises(HTTPException) as error,
+    ):
+        await service.seed_defaults(user)
+    assert error.value.status_code == 500
+    assert await service.list_all(None, user) == []
+    invalidate.assert_not_awaited()
 
 
 async def test_institution_inherits_crud_without_redefining_it(
@@ -122,7 +169,8 @@ async def test_resolve_translates_once_and_rolls_back(service, user, failure):
             target, failure, new=AsyncMock(side_effect=RuntimeError("database failure"))
         ),
         patch(
-            "app.core.service.base.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
         patch("app.core.service.base.log_service_success") as success,
         pytest.raises(HTTPException) as caught,

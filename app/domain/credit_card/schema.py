@@ -54,3 +54,8 @@ class CreditCardUpdateSchema(CreditCardCreateSchema):
         if value is None:
             raise ValueError("Field cannot be null")
         return value
+
+
+class CreditCardSeedSchema(BaseModel):
+    created: int
+    skipped: int

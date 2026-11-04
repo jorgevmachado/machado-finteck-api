@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -12,11 +12,63 @@ from app.domain.credit_card.schema import (
     CreditCardUpdateSchema,
 )
 from app.domain.credit_card.service import CreditCardService
+from app.domain.credit_card.seeds import load_seeds_credit_cards
 from app.models import CreditCard, CreditCardBrandEnum
 from app.shared.schemas import FilterPage, Message
 from app.core.service import BaseService
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_seed_defaults_is_owner_scoped_repeatable_and_invalidates_cache(
+    service, user, credit_card_cache
+):
+    catalog = load_seeds_credit_cards()
+    existing = await service.create(user, _create_payload(catalog[0].name))
+    existing_id = existing.id
+    await service.list_all_cached(None, user)
+    assert credit_card_cache._data
+    result = await service.seed_defaults(user)
+    assert result.created == len(catalog) - 1
+    assert result.skipped == 1
+    assert credit_card_cache._data == {}
+    existing = await service.find_one(existing_id, user)
+    assert existing.brand == CreditCardBrandEnum.VISA
+    assert existing.closing_day == 15
+    repeated = await service.seed_defaults(user)
+    assert repeated.created == 0
+    assert repeated.skipped == len(catalog)
+    other = SimpleNamespace(id=uuid4(), username="other")
+    assert (await service.seed_defaults(other)).created == len(catalog)
+    own = await service.list_all(None, user)
+    assert len(own) == len(catalog)
+    assert all(item.user_id == user.id for item in own)
+    for template in catalog[1:]:
+        card = next(item for item in own if item.name == template.name)
+        for field in ("brand", "limit", "due_day", "closing_day", "color", "is_active"):
+            assert getattr(card, field) == getattr(template, field)
+
+
+async def test_seed_defaults_rolls_back_partial_writes(service, user):
+    save = service.repository.save
+    calls = 0
+
+    async def failing_save(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("seed failure")
+        return await save(*args, **kwargs)
+
+    with (
+        patch.object(service.repository, "save", side_effect=failing_save),
+        patch.object(service, "_invalidate_cache", new=AsyncMock()) as invalidate,
+        pytest.raises(HTTPException) as error,
+    ):
+        await service.seed_defaults(user)
+    assert error.value.status_code == 500
+    assert await service.list_all(None, user) == []
+    invalidate.assert_not_awaited()
 
 
 def _create_payload(name: str, **overrides) -> CreditCardCreateSchema:

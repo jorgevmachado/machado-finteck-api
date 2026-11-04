@@ -35,6 +35,22 @@ def owned_transaction_session():
     return session
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total", [0, 7])
+async def test_count_subcategories_scopes_to_owner_and_live_aggregate(user, total):
+    session = repository_session()
+    session.scalar.return_value = total
+    assert (
+        await CategoryRepository(session).count_subcategories(user_id=user.id) == total
+    )
+    query = session.scalar.await_args.args[0]
+    sql = str(query.compile(dialect=postgresql.dialect()))
+    assert "categories.user_id =" in sql
+    assert "categories.deleted_at IS NULL" in sql
+    assert "subcategories.deleted_at IS NULL" in sql
+    assert user.id in query.compile().params.values()
+
+
 class TestCategoryRepositoryTransaction:
     @staticmethod
     @pytest.mark.asyncio

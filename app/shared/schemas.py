@@ -9,6 +9,17 @@ class Message(BaseModel):
     message: str
 
 
+class SeedSummarySchema(BaseModel):
+    account: int
+    credit_card: int
+    institution: int
+    category: int
+    subcategory: int
+    transaction: int
+    transaction_series: int
+    scheduled_transaction: int
+
+
 TFilterPage = TypeVar("TFilterPage", bound="FilterPage")
 
 

@@ -28,6 +28,26 @@ def test_credit_card_service_builds_from_session():
     assert isinstance(credit_card_service(AsyncMock()), CreditCardService)
 
 
+@pytest.mark.parametrize("authenticated", [False, True])
+def test_seed_route_authenticates_and_delegates(user, authenticated):
+    app = FastAPI()
+    app.include_router(router, prefix="/credit-cards")
+    service = AsyncMock()
+    service.seed_defaults.return_value = {"created": 3, "skipped": 1}
+    app.dependency_overrides[credit_card_service] = lambda: service
+    if authenticated:
+        app.dependency_overrides[get_current_user] = lambda: user
+    with TestClient(app) as client:
+        response = client.post("/credit-cards/seed")
+    if authenticated:
+        assert response.status_code == 200
+        assert response.json() == {"created": 3, "skipped": 1}
+        service.seed_defaults.assert_awaited_once_with(user=user)
+    else:
+        assert response.status_code == 401
+        service.seed_defaults.assert_not_awaited()
+
+
 def test_credit_card_filter_builds_dynamic_filter():
     page_filter = credit_card_filter(page=1, name="Test Credit Card", limit=12)
 

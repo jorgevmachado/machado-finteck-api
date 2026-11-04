@@ -12,7 +12,9 @@ from app.domain.account.schema import (
     AccountSchema,
     AccountCreateSchema,
     AccountUpdateSchema,
+    AccountSeedSchema,
 )
+from app.domain.account.seeds import load_seeds_accounts
 from app.models import Account, AccountTypeEnum, User
 from app.core.service import BaseService
 
@@ -83,3 +85,23 @@ class AccountService(
                     detail="Account already exists",
                 )
         return data
+
+    async def seed_defaults(self, user: User) -> AccountSeedSchema:
+        async with self._operation("seed_defaults", user.username):
+            payloads = load_seeds_accounts()
+            created: list[Account] = []
+            skipped = 0
+            async with self.repository.transaction():
+                for payload in payloads:
+                    existing = await self.repository.find_by_name(
+                        name=payload.name, user_id=user.id
+                    )
+                    if existing is not None:
+                        skipped += 1
+                        continue
+                    entity = self._build_entity(user.id, payload.model_dump())
+                    await self.repository.save(entity, user_id=user.id)
+                    created.append(entity)
+            if created:
+                await self._invalidate_cache(user, created[0], "seed_defaults")
+            return AccountSeedSchema(created=len(created), skipped=skipped)

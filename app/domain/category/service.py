@@ -72,6 +72,10 @@ class CategoryService(
             )
         return data
 
+    async def count_subcategories(self, user: User) -> int:
+        async with self._operation("count_subcategories", user.username):
+            return await self.repository.count_subcategories(user_id=user.id)
+
     async def seed_defaults(self, user: User) -> CategorySeedSchema:
         async with self._operation("seed_defaults", user.username):
             payloads = load_default_categories()

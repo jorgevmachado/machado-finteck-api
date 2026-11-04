@@ -5,7 +5,11 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.domain.transaction.repository import TransactionRepository
-from app.models import TransactionDirectionEnum, TransactionStatusEnum
+from app.models import (
+    ScheduledTransaction,
+    TransactionDirectionEnum,
+    TransactionStatusEnum,
+)
 from app.shared.schemas import FilterPage
 
 pytestmark = pytest.mark.asyncio
@@ -101,4 +105,32 @@ async def test_delete_rejects_foreign_entity_before_sql(
             await repository.delete(transaction_entity, user_id=uuid4())
     transaction_session.scalar.assert_not_awaited()
     transaction_session.delete.assert_not_awaited()
+    transaction_session.rollback.assert_awaited_once()
+
+
+async def test_seed_rejects_occurrence_linked_to_different_series_before_writing(
+    transaction_session, series_entity, transaction_payload, user
+):
+    series_entity.scheduled_transactions = [
+        ScheduledTransaction(
+            user_id=user.id,
+            transaction_series_id=uuid4(),
+            occurrence_on=transaction_payload.expected_on,
+            occurrence_index=1,
+            **transaction_payload.model_dump(),
+        )
+    ]
+    transaction_session.info = {}
+    transaction_session.begin = AsyncMock()
+    transaction_session.in_transaction.return_value = False
+    transaction_session.in_nested_transaction.return_value = False
+    repository = TransactionRepository(transaction_session)
+    with pytest.raises(ValueError, match="belongs to a different series"):
+        async with repository.transaction():
+            await repository.save_seed(
+                transactions=[], series=[series_entity], user_id=user.id
+            )
+    transaction_session.add_all.assert_not_called()
+    transaction_session.flush.assert_not_awaited()
+    transaction_session.commit.assert_not_awaited()
     transaction_session.rollback.assert_awaited_once()
