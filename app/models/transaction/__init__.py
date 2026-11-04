@@ -6,6 +6,7 @@ from app.models.transaction.enums import (
 )
 from app.models.transaction.transaction import Transaction
 from app.models.transaction.transaction_series import TransactionSeries
+from app.models.transaction.scheduled_transaction import ScheduledTransaction
 
 __all__ = [
     "TransactionDirectionEnum",
@@ -14,4 +15,5 @@ __all__ = [
     "TransactionFrequencyUnitEnum",
     "Transaction",
     "TransactionSeries",
+    "ScheduledTransaction"
 ]

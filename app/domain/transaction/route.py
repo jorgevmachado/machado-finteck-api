@@ -19,9 +19,11 @@ from app.models import User, TransactionDirectionEnum, TransactionStatusEnum
 from app.shared.schemas import FilterPage, Message
 
 from app.domain.transaction.series.route import router as transaction_series_router
+from app.domain.transaction.scheduled.route import router as scheduled_transaction_router
 
 router = APIRouter()
 router.include_router(transaction_series_router, prefix="/series", tags=["Transaction Series"])
+router.include_router(scheduled_transaction_router, prefix="/scheduled", tags=["Scheduled Transactions"])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 

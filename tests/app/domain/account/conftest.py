@@ -10,7 +10,14 @@ from app.core.cache.manager import CacheManager
 from app.core.database.base import table_registry
 from app.domain.account.schema import AccountCreateSchema, AccountUpdateSchema
 from app.domain.account.service import AccountService
-from app.models import Account, Transaction, TransactionSeries, utcnow, AccountTypeEnum
+from app.models import (
+    Account,
+    AccountTypeEnum,
+    ScheduledTransaction,
+    Transaction,
+    TransactionSeries,
+    utcnow,
+)
 from tests.conftest import FakeRedis
 
 
@@ -43,6 +50,7 @@ async def account_session():
                     Account.__table__,
                     Transaction.__table__,
                     TransactionSeries.__table__,
+                    ScheduledTransaction.__table__,
                 ],
             )
         )

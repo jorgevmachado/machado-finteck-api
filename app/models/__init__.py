@@ -21,7 +21,8 @@ from app.models.transaction import (
     TransactionKindEnum,
     TransactionFrequencyUnitEnum,
     Transaction,
-    TransactionSeries
+    TransactionSeries,
+    ScheduledTransaction
 )
 
 __all__ = [
@@ -51,5 +52,6 @@ __all__ = [
     "TransactionKindEnum",
     "TransactionFrequencyUnitEnum",
     "TransactionSeries",
+    "ScheduledTransaction",
     "utcnow",
 ]

@@ -15,6 +15,7 @@ from app.domain.credit_card.schema import (
 from app.domain.credit_card.service import CreditCardService
 from app.models import (
     CreditCard,
+    ScheduledTransaction,
     Transaction,
     TransactionSeries,
     utcnow,
@@ -52,6 +53,7 @@ async def credit_card_session():
                     CreditCard.__table__,
                     Transaction.__table__,
                     TransactionSeries.__table__,
+                    ScheduledTransaction.__table__,
                 ],
             )
         )

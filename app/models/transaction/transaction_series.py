@@ -15,7 +15,7 @@ from app.models.transaction.enums import TransactionDirectionEnum, TransactionKi
     TransactionFrequencyUnitEnum
 
 if TYPE_CHECKING:
-    from app.models import Account, Subcategory, CreditCard
+    from app.models import Account, Subcategory, CreditCard, ScheduledTransaction
 
 
 @table_registry.mapped_as_dataclass
@@ -112,4 +112,12 @@ class TransactionSeries:
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None, init=False
+    )
+
+    scheduled_transactions: Mapped[list["ScheduledTransaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="transaction_serie",
     )
