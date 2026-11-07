@@ -24,8 +24,10 @@ from app.domain.transaction.series.route import router as transaction_series_rou
 from app.domain.transaction.scheduled.route import (
     router as scheduled_transaction_router,
 )
+from app.domain.transaction.statement.route import router as statement_router
 
 router = APIRouter()
+router.include_router(statement_router, prefix="/statement", tags=["Statement"])
 router.include_router(
     transaction_series_router, prefix="/series", tags=["Transaction Series"]
 )

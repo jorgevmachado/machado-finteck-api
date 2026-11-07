@@ -1,4 +1,124 @@
-# Transaction: seed de dados
+# Transaction: seed e extrato
+
+## Extrato unificado
+
+`GET /transactions/statement` retorna avulsas, agendamentos gravados e
+ocorrencias projetadas das series em uma lista unica. Exige autenticacao JWT;
+nao exige admin e consulta somente registros do usuario autenticado.
+Nao altera as rotas CRUD existentes.
+
+```bash
+curl -G http://localhost:8000/transactions/statement \
+  -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode "start_date=2026-11-01" \
+  --data-urlencode "end_date=2026-11-30" \
+  --data-urlencode "page=1" \
+  --data-urlencode "limit=12"
+```
+
+`start_date` e `end_date` sao obrigatorios e inclusivos. O periodo maximo e de
+366 dias, sem datas invertidas. Filtros opcionais: `account_id`, `credit_card_id`,
+`subcategory_id`, `direction`, `status`, `search` e `only_credit_card`.
+Parametros invalidos ou desconhecidos retornam `422`.
+
+`search` faz busca parcial no nome sem diferenciar maiusculas.
+`only_credit_card=true` inclui somente entradas com cartao, `false` somente
+entradas sem cartao, e sua omissao inclui ambas. `credit_card_id` tem
+precedencia sobre `only_credit_card`.
+
+```json
+{
+  "items": [
+    {
+      "source": "PROJECTED",
+      "id": null,
+      "name": "Assinatura",
+      "note": null,
+      "value": "100.00",
+      "direction": "OUT",
+      "status": "PENDING",
+      "expected_on": "2026-11-10",
+      "settled_on": null,
+      "account_id": "00000000-0000-0000-0000-000000000001",
+      "credit_card_id": null,
+      "subcategory_id": null,
+      "transaction_series_id": "00000000-0000-0000-0000-000000000002",
+      "series_name": "Assinatura",
+      "series_kind": "OPEN",
+      "installments": null,
+      "occurrence_index": 11,
+      "occurrence_on": "2026-11-10"
+    }
+  ],
+  "meta": {
+    "total": 1,
+    "limit": 12,
+    "offset": 0,
+    "next_page": null,
+    "previous_page": null,
+    "total_pages": 1,
+    "current_page": 1
+  }
+}
+```
+
+Os filtros herdam `FilterPage`, seguindo o padrao de transactions: `page` e
+`limit`, ou `offset` e `limit`, ativam `CustomLimitOffsetPage` (`items` e `meta`).
+`page=1` e a primeira pagina; `page` tem precedencia sobre `offset`.
+O limite padrao e 12, com teto de 100 pelo mecanismo compartilhado.
+Sem `page` e sem `offset`, retorna uma lista simples, como as demais listagens.
+A paginacao ocorre depois de combinar, substituir, filtrar e ordenar as
+entradas; `meta.total` conta o resultado completo antes do recorte.
+`clean_cache` e aceito por `FilterPage`, mas esta consulta nao usa cache.
+
+`value` e serializado como string decimal. `order_by` aceita `expected_on`
+(padrao), `name` ou `value`; `order` aceita `desc` (padrao) ou `asc`.
+Nos empates, avulsas, gravadas e projetadas, com desempate estavel por
+identificador e indice.
+
+### Projecoes e substituicoes
+
+- `TRANSACTION`: avulsa persistida, com UUID e campos de serie nulos.
+- `SCHEDULED`: ocorrencia persistida; prevalece sobre a projecao do mesmo
+  par `(transaction_series_id, occurrence_index)`.
+- `PROJECTED`: ocorrencia calculada em memoria; `id=null` e identidade pelo
+  par `(transaction_series_id, occurrence_index)`, a partir de **1**.
+  Nao sao gerados UUIDs aleatorios para projecoes.
+
+A serie e uma regra e nao gera uma linha adicional no extrato.
+O calculo respeita `WEEK`, `MONTH`, `YEAR`, `frequency_interval`, ancoras,
+`start_date`, `end_date` e o limite de parcelas de series `CLOSED`.
+A primeira ocorrencia e a primeira data correspondente a ancora a partir do
+inicio da serie; o intervalo e contado a partir dela. Por exemplo, inicio
+em 15/09 com dia 10 tem primeira ocorrencia em 10/10.
+Ancoras omitidas usam dia/mes/dia-da-semana da data inicial.
+Dias da semana seguem ISO: segunda=1 e domingo=7.
+Meses curtos ajustam o dia ao ultimo existente, sem perder a ancora nos meses
+seguintes; 29/02 anual volta a 29/02 nos anos bissextos.
+
+Projecoes sao sempre `PENDING`, inclusive em datas passadas. Confirmacao e
+cancelamento dependem de um registro persistido. O GET nao materializa
+ocorrencias, nao altera status e nao faz commit.
+
+O periodo e aplicado sobre o `expected_on` final. Quando uma ocorrencia e
+movida para outro mes, sua projecao original e suprimida mesmo se a versao
+gravada estiver fora do periodo consultado. `occurrence_on` e o indice
+identificam a ocorrencia original; `expected_on` e a data atual.
+Os demais filtros sao aplicados depois dessa substituicao, evitando recriar
+uma pendente quando a gravada esta cancelada, efetivada ou tem outros dados.
+
+Series excluidas e seus agendamentos nao aparecem. Avulsas e agendamentos
+com `deleted_at` preenchido tambem sao ignorados. Excluir fisicamente um
+agendamento volta a permitir a projecao da serie. Dois agendamentos vivos
+para o mesmo par serie/indice sao inconsistentes e retornam erro registrado
+em log, em vez de selecionar arbitrariamente um deles.
+
+`statement/route.py` delega ao servico; `statement/repository.py` consulta os
+registros por dono; `statement/business.py` projeta e combina em memoria;
+`statement/schema.py` define filtros e DTOs. Falhas de banco ou regras
+invalidas de series persistidas retornam `500` com logging padrao.
+
+## Seed de dados
 
 `POST /transactions/seed` popula `transactions`, `transaction_series` e
 `scheduled_transactions` com dados ficticios. Exige Bearer token de um usuario

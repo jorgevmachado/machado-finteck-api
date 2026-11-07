@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING
 
 from uuid import UUID, uuid4
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, Enum as SAEnum, Boolean, Integer
+from sqlalchemy import DateTime, ForeignKey, String, Text, Enum as SAEnum, Boolean, Integer, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database.base import table_registry, default_lazy
@@ -48,8 +49,8 @@ class CreditCard:
         Integer,
         nullable=False,
     )
-    limit: Mapped[int | None] = mapped_column(
-        Integer,
+    limit: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
         nullable=True,
     )
     color: Mapped[str | None] = mapped_column(

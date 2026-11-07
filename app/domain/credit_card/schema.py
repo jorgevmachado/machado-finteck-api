@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -13,7 +14,7 @@ class CreditCardSchema(BaseModel):
     icon: str | None = None
     brand: CreditCardBrandEnum
     name: str
-    limit: int | None = None
+    limit: Decimal | None = None
     color: str | None = None
     due_day: int
     is_active: bool
@@ -31,7 +32,7 @@ class CreditCardCreateSchema(BaseModel):
     icon: str | None = None
     brand: CreditCardBrandEnum
     name: str
-    limit: int | None = None
+    limit: Decimal | None = None
     color: str | None = None
     due_day: int
     is_active: bool = True

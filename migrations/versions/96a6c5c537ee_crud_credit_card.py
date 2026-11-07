@@ -44,7 +44,7 @@ def upgrade() -> None:
     sa.Column('last_four_digits', sa.String(), nullable=True),
     sa.Column('closing_day', sa.Integer(), nullable=False),
     sa.Column('due_day', sa.Integer(), nullable=False),
-    sa.Column('limit', sa.Integer(), nullable=True),
+    sa.Column('limit', sa.Numeric(precision=12, scale=2), nullable=True),
     sa.Column('color', sa.String(), nullable=True),
     sa.Column('icon', sa.String(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),

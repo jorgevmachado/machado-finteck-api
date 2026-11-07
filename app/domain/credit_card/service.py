@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from http import HTTPStatus
 from uuid import UUID
 
@@ -57,6 +58,8 @@ class CreditCardService(
         description = data.get("description")
         last_four_digits = data.get("last_four_digits")
         limit = data.get("limit")
+        if isinstance(limit, int) and not isinstance(limit, bool):
+            limit = Decimal(limit)
         return CreditCard(
             user_id=user_id,
             name=name,
@@ -70,7 +73,7 @@ class CreditCardService(
             ),
             closing_day=closing_day,
             due_day=due_day,
-            limit=limit if isinstance(limit, int) else None,
+            limit=limit if isinstance(limit, Decimal) else None,
         )
 
     async def _normalize(

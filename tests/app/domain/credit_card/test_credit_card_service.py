@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -110,6 +111,14 @@ async def test_crud_preserves_partial_update_and_deletes(
     result = await service.delete(user, identifier)
     assert result.message == f"Delete CreditCard {identifier} successfully"
     assert await service.list_all(None, user) == []
+
+
+async def test_create_preserves_decimal_credit_card_limit(service, user):
+    credit_card = await service.create(
+        user, _create_payload("Fractional limit", limit=Decimal("1234.56"))
+    )
+
+    assert credit_card.limit == Decimal("1234.56")
 
 
 async def test_normalized_conflicts_and_self_rename(service, user):
@@ -272,6 +281,14 @@ def _valid_data(name: str = "Visa") -> dict[str, object]:
 async def test_build_entity_rejects_non_string_name(service, user):
     with pytest.raises(ValueError, match="name and brand"):
         service._build_entity(user.id, {**_valid_data(), "name": 123})
+
+
+async def test_build_entity_converts_integer_limit_to_decimal(service, user):
+    credit_card = service._build_entity(
+        user.id, {**_valid_data(), "limit": 5000}
+    )
+
+    assert credit_card.limit == Decimal("5000")
 
 
 async def test_build_entity_rejects_missing_brand(service, user):
