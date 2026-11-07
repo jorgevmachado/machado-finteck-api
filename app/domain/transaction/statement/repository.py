@@ -1,0 +1,89 @@
+from collections.abc import Sequence
+from uuid import UUID
+
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import lazyload
+
+from app.core.repository import BaseRepository
+from app.models import ScheduledTransaction, Transaction, TransactionSeries
+
+from app.domain.transaction.statement.schema import StatementFilterSchema
+
+
+class StatementRepository(BaseRepository[Transaction]):
+    model = Transaction
+
+    async def transactions(
+        self, *, user_id: UUID, filters: StatementFilterSchema
+    ) -> Sequence[Transaction]:
+        self.require_owner(user_id)
+        return (
+            await self.session.scalars(
+                select(Transaction)
+                .options(lazyload("*"))
+                .where(
+                    Transaction.user_id == user_id,
+                    Transaction.deleted_at.is_(None),
+                    Transaction.expected_on.between(
+                        filters.start_date, filters.end_date
+                    ),
+                )
+            )
+        ).all()
+
+    async def series(
+        self, *, user_id: UUID, filters: StatementFilterSchema
+    ) -> Sequence[TransactionSeries]:
+        self.require_owner(user_id)
+        return (
+            await self.session.scalars(
+                select(TransactionSeries)
+                .options(lazyload("*"))
+                .where(
+                    TransactionSeries.user_id == user_id,
+                    TransactionSeries.deleted_at.is_(None),
+                    TransactionSeries.start_date <= filters.end_date,
+                    or_(
+                        TransactionSeries.end_date.is_(None),
+                        TransactionSeries.end_date >= filters.start_date,
+                    ),
+                )
+            )
+        ).all()
+
+    async def scheduled(
+        self,
+        *,
+        user_id: UUID,
+        filters: StatementFilterSchema,
+        projected_ranges: dict[UUID, tuple[int, int]],
+    ) -> Sequence[tuple[ScheduledTransaction, TransactionSeries]]:
+        self.require_owner(user_id)
+        replacements = [
+            and_(
+                ScheduledTransaction.transaction_series_id == series_id,
+                ScheduledTransaction.occurrence_index.between(first, last),
+            )
+            for series_id, (first, last) in projected_ranges.items()
+        ]
+        result = await self.session.execute(
+            select(ScheduledTransaction, TransactionSeries)
+            .join(
+                TransactionSeries,
+                ScheduledTransaction.transaction_series_id == TransactionSeries.id,
+            )
+            .options(lazyload("*"))
+            .where(
+                ScheduledTransaction.user_id == user_id,
+                TransactionSeries.user_id == user_id,
+                ScheduledTransaction.deleted_at.is_(None),
+                TransactionSeries.deleted_at.is_(None),
+                or_(
+                    ScheduledTransaction.expected_on.between(
+                        filters.start_date, filters.end_date
+                    ),
+                    *replacements,
+                ),
+            )
+        )
+        return [(row[0], row[1]) for row in result.all()]
