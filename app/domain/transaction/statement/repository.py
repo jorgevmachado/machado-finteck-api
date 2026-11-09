@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import lazyload
+from sqlalchemy.orm import lazyload, selectinload
 
 from app.core.repository import BaseRepository
 from app.models import ScheduledTransaction, Transaction, TransactionSeries
@@ -20,7 +20,12 @@ class StatementRepository(BaseRepository[Transaction]):
         return (
             await self.session.scalars(
                 select(Transaction)
-                .options(lazyload("*"))
+                .options(
+                    lazyload("*"),
+                    selectinload(Transaction.account),
+                    selectinload(Transaction.credit_card),
+                    selectinload(Transaction.subcategory),
+                )
                 .where(
                     Transaction.user_id == user_id,
                     Transaction.deleted_at.is_(None),
@@ -38,7 +43,12 @@ class StatementRepository(BaseRepository[Transaction]):
         return (
             await self.session.scalars(
                 select(TransactionSeries)
-                .options(lazyload("*"))
+                .options(
+                    lazyload("*"),
+                    selectinload(TransactionSeries.account),
+                    selectinload(TransactionSeries.credit_card),
+                    selectinload(TransactionSeries.subcategory),
+                )
                 .where(
                     TransactionSeries.user_id == user_id,
                     TransactionSeries.deleted_at.is_(None),
@@ -72,7 +82,12 @@ class StatementRepository(BaseRepository[Transaction]):
                 TransactionSeries,
                 ScheduledTransaction.transaction_series_id == TransactionSeries.id,
             )
-            .options(lazyload("*"))
+            .options(
+                lazyload("*"),
+                selectinload(ScheduledTransaction.account),
+                selectinload(ScheduledTransaction.credit_card),
+                selectinload(ScheduledTransaction.subcategory),
+            )
             .where(
                 ScheduledTransaction.user_id == user_id,
                 TransactionSeries.user_id == user_id,

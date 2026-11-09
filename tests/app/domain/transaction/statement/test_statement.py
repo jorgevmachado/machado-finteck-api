@@ -10,7 +10,7 @@ import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import event, select
+from sqlalchemy import Column, MetaData, String, Table, event, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.database import get_session
@@ -21,13 +21,23 @@ from app.domain.transaction.route import router
 from app.domain.transaction.schema import TransactionCreateSchema
 from app.domain.transaction.series.schema import TransactionSeriesCreateSchema
 from app.domain.transaction.statement.business import combine_statement, project_series
+from app.domain.transaction.statement.repository import StatementRepository
 from app.domain.transaction.statement.route import statement_service
 from app.domain.transaction.statement.schema import (
+    StatementEntrySchema,
     StatementFilterSchema,
     StatementSeriesSchema,
 )
 from app.domain.transaction.statement.service import StatementService
-from app.models import ScheduledTransaction, Transaction, TransactionSeries, utcnow
+from app.models import (
+    Account,
+    CreditCard,
+    ScheduledTransaction,
+    Subcategory,
+    Transaction,
+    TransactionSeries,
+    utcnow,
+)
 from app.shared.schemas import FilterPage
 
 
@@ -35,6 +45,46 @@ def period(start="2026-11-01", end="2026-11-30", **kwargs):
     return StatementFilterSchema(
         start_date=start, end_date=end, **{"page": 1, **kwargs}
     )
+
+
+def make_account(user_id, account_id):
+    account = Account(
+        user_id=user_id,
+        name="Main account",
+        description=None,
+        type="CHECKING",
+        account_number=None,
+        agency=None,
+        financial_institution=None,
+        color=None,
+        icon=None,
+    )
+    account.id = account_id
+    return account
+
+
+def make_card(user_id, card_id):
+    card = CreditCard(
+        user_id=user_id,
+        name="Main card",
+        description=None,
+        brand="VISA",
+        last_four_digits=None,
+        closing_day=5,
+        due_day=15,
+        limit=Decimal("1000.00"),
+        color=None,
+        icon=None,
+    )
+    card.id = card_id
+    return card
+
+
+def make_subcategory(subcategory_id):
+    subcategory = Subcategory(name="Groceries", order=1)
+    subcategory.id = subcategory_id
+    subcategory.category_id = uuid4()
+    return subcategory
 
 
 def make_series(user_id, **kwargs):
@@ -52,7 +102,15 @@ def make_series(user_id, **kwargs):
             **kwargs,
         }
     )
-    return TransactionSeries(user_id=user_id, **payload.model_dump())
+    entity = TransactionSeries(user_id=user_id, **payload.model_dump())
+    entity.account = make_account(user_id, entity.account_id)
+    entity.credit_card = (
+        make_card(user_id, entity.credit_card_id) if entity.credit_card_id else None
+    )
+    entity.subcategory = (
+        make_subcategory(entity.subcategory_id) if entity.subcategory_id else None
+    )
+    return entity
 
 
 def projected(entity, filters):
@@ -236,9 +294,26 @@ async def statement_session():
                     Transaction.__table__,
                     TransactionSeries.__table__,
                     ScheduledTransaction.__table__,
+                    Account.__table__,
+                    CreditCard.__table__,
                 ],
             )
         )
+        # PostgreSQL-specific category constraints are covered by integration tests.
+        metadata = MetaData()
+        Table(
+            "subcategories",
+            metadata,
+            *(
+                Column(
+                    column.name,
+                    String() if column.name == "name" else column.type,
+                    primary_key=column.primary_key,
+                )
+                for column in Subcategory.__table__.columns
+            ),
+        )
+        await connection.run_sync(metadata.create_all)
     async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
     await engine.dispose()
@@ -259,7 +334,7 @@ def make_transaction(user_id, account_id, **kwargs):
 
 
 def make_scheduled(entity, **kwargs):
-    return ScheduledTransaction(
+    scheduled = ScheduledTransaction(
         **{
             "user_id": entity.user_id,
             "account_id": entity.account_id,
@@ -278,6 +353,26 @@ def make_scheduled(entity, **kwargs):
             **kwargs,
         }
     )
+    scheduled.account = (
+        entity.account
+        if scheduled.account_id == entity.account_id
+        else make_account(scheduled.user_id, scheduled.account_id)
+    )
+    scheduled.credit_card = (
+        entity.credit_card
+        if scheduled.credit_card_id == entity.credit_card_id
+        else make_card(scheduled.user_id, scheduled.credit_card_id)
+        if scheduled.credit_card_id
+        else None
+    )
+    scheduled.subcategory = (
+        entity.subcategory
+        if scheduled.subcategory_id == entity.subcategory_id
+        else make_subcategory(scheduled.subcategory_id)
+        if scheduled.subcategory_id
+        else None
+    )
+    return scheduled
 
 
 @pytest.mark.asyncio
@@ -618,6 +713,40 @@ def test_statement_http_validates_and_delegates(statement_client, user):
     )
 
 
+@pytest.mark.parametrize("field", ["account_id", "credit_card_id", "subcategory_id"])
+def test_statement_http_accepts_uuid_filters(statement_client, user, field):
+    client, service = statement_client
+    identifier = uuid4()
+    response = client.get(
+        "/transactions/statement",
+        params={
+            "start_date": "2026-11-01",
+            "end_date": "2026-11-30",
+            field: str(identifier),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+    service.list_all.assert_awaited_once_with(
+        user=user, page_filter=period(page=None, **{field: identifier})
+    )
+
+
+@pytest.mark.parametrize("field", ["account_id", "credit_card_id", "subcategory_id"])
+def test_statement_http_rejects_invalid_uuid_filters(statement_client, field):
+    client, service = statement_client
+    response = client.get(
+        "/transactions/statement",
+        params={
+            "start_date": "2026-11-01",
+            "end_date": "2026-11-30",
+            field: "INVALID",
+        },
+    )
+    assert response.status_code == 422
+    service.list_all.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -694,8 +823,107 @@ async def test_http_real_statement_service_returns_projected_entries_without_ins
     assert entry["source"] == "PROJECTED"
     assert entry["id"] is None
     assert entry["value"] == "100.00"
+    assert entry["account"]["id"] == str(entity.account_id)
+    assert entry["credit_card"] is None
+    assert entry["subcategory"] is None
+    assert not {"account_id", "credit_card_id", "subcategory_id"} & entry.keys()
     assert entry["occurrence_index"] == 11
     assert list(await statement_session.scalars(select(ScheduledTransaction))) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["TRANSACTION", "SCHEDULED", "PROJECTED"])
+@pytest.mark.parametrize("with_optional_relations", [False, True])
+async def test_statement_returns_nested_relations_for_each_source(
+    statement_session, user, source, with_optional_relations
+):
+    relations = (
+        {"credit_card_id": uuid4(), "subcategory_id": uuid4()}
+        if with_optional_relations
+        else {}
+    )
+    entity = make_series(
+        user.id,
+        start_date="2027-01-10" if source == "TRANSACTION" else "2026-01-10",
+        **relations,
+    )
+    statement_session.add(entity)
+    if source == "TRANSACTION":
+        statement_session.add(make_transaction(user.id, entity.account_id, **relations))
+    elif source == "SCHEDULED":
+        statement_session.add(make_scheduled(entity))
+    await statement_session.commit()
+    account_id = entity.account_id
+    statement_session.expunge_all()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/transactions")
+    app.dependency_overrides[get_session] = lambda: statement_session
+    app.dependency_overrides[get_current_user] = lambda: user
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/transactions/statement",
+            params={
+                "start_date": "2026-11-01",
+                "end_date": "2026-11-30",
+                "account_id": str(account_id),
+                **{field: str(value) for field, value in relations.items()},
+            },
+        )
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    entry = response.json()[0]
+    assert entry["source"] == source
+    assert entry["account"]["id"] == str(account_id)
+    assert entry["account"]["name"] == "Main account"
+    assert entry["account"]["type"] == "CHECKING"
+    assert not {"account_id", "credit_card_id", "subcategory_id"} & entry.keys()
+    if with_optional_relations:
+        assert entry["credit_card"]["id"] == str(relations["credit_card_id"])
+        assert entry["credit_card"]["brand"] == "VISA"
+        assert entry["subcategory"]["id"] == str(relations["subcategory_id"])
+        assert entry["subcategory"]["name"] == "Groceries"
+    else:
+        assert entry["credit_card"] is None
+        assert entry["subcategory"] is None
+
+
+@pytest.mark.asyncio
+async def test_repository_loads_relations_before_synchronous_serialization(
+    statement_session, user
+):
+    entity = make_series(user.id, credit_card_id=uuid4(), subcategory_id=uuid4())
+    transaction = make_transaction(
+        user.id,
+        entity.account_id,
+        credit_card_id=entity.credit_card_id,
+        subcategory_id=entity.subcategory_id,
+    )
+    scheduled = make_scheduled(entity)
+    statement_session.add_all([entity, transaction, scheduled])
+    await statement_session.commit()
+    series_id = entity.id
+    statement_session.expunge_all()
+    repository = StatementRepository(statement_session)
+    filters = period()
+    series = await repository.series(user_id=user.id, filters=filters)
+    transactions = await repository.transactions(user_id=user.id, filters=filters)
+    overrides = await repository.scheduled(
+        user_id=user.id, filters=filters, projected_ranges={series_id: (11, 11)}
+    )
+    statement_session.expunge_all()
+
+    series_dto = StatementSeriesSchema.model_validate(series[0])
+    assert series_dto.account.name == "Main account"
+    assert series_dto.credit_card.name == "Main card"
+    assert series_dto.subcategory.name == "Groceries"
+    for entry in [*transactions, *(override for override, _ in overrides)]:
+        dto = StatementEntrySchema.model_validate(entry)
+        assert dto.account == series_dto.account
+        assert dto.credit_card == series_dto.credit_card
+        assert dto.subcategory == series_dto.subcategory
 
 
 @pytest.mark.asyncio

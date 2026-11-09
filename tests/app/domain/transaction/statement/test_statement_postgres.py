@@ -83,6 +83,13 @@ async def test_statement_with_real_postgres_and_moved_occurrence(request):
                 assert entry["occurrence_index"] == 1
                 assert entry["expected_on"] == "2026-10-10"
                 assert entry["value"] == "250.50"
+                assert entry["account"]["id"] == str(account.id)
+                assert entry["credit_card"] is None
+                assert entry["subcategory"] is None
+                assert (
+                    not {"account_id", "credit_card_id", "subcategory_id"}
+                    & entry.keys()
+                )
                 assert (
                     await session.scalar(
                         select(func.count()).select_from(ScheduledTransaction)
@@ -136,6 +143,7 @@ async def test_statement_with_real_postgres_and_moved_occurrence(request):
                     ("SCHEDULED", 2),
                 ]
                 assert december.json()["items"][1]["value"] == "300.00"
+                assert december.json()["items"][1]["account"]["id"] == str(account.id)
                 assert (
                     await session.scalar(
                         select(func.count()).select_from(ScheduledTransaction)

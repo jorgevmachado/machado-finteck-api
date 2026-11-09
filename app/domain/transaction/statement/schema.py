@@ -5,6 +5,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.account.schema import AccountSchema
+from app.domain.category import SubcategorySchema
+from app.domain.credit_card.schema import CreditCardSchema
 from app.models import (
     TransactionDirectionEnum,
     TransactionFrequencyUnitEnum,
@@ -52,9 +55,9 @@ class StatementEntrySchema(BaseModel):
     status: TransactionStatusEnum
     expected_on: date
     settled_on: date | None = None
-    account_id: UUID
-    credit_card_id: UUID | None = None
-    subcategory_id: UUID | None = None
+    account: AccountSchema
+    credit_card: CreditCardSchema | None = None
+    subcategory: SubcategorySchema | None = None
     transaction_series_id: UUID | None = None
     series_name: str | None = None
     series_kind: TransactionKindEnum | None = None
@@ -71,9 +74,9 @@ class StatementSeriesSchema(BaseModel):
     note: str | None
     value: Decimal
     direction: TransactionDirectionEnum
-    account_id: UUID
-    credit_card_id: UUID | None
-    subcategory_id: UUID | None
+    account: AccountSchema
+    credit_card: CreditCardSchema | None = None
+    subcategory: SubcategorySchema | None = None
     kind: TransactionKindEnum
     frequency_unit: TransactionFrequencyUnitEnum
     frequency_interval: int = Field(gt=0)

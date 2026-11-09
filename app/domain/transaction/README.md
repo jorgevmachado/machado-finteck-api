@@ -19,6 +19,7 @@ curl -G http://localhost:8000/transactions/statement \
 `start_date` e `end_date` sao obrigatorios e inclusivos. O periodo maximo e de
 366 dias, sem datas invertidas. Filtros opcionais: `account_id`, `credit_card_id`,
 `subcategory_id`, `direction`, `status`, `search` e `only_credit_card`.
+Os filtros terminados em `_id` recebem UUIDs, nao objetos.
 Parametros invalidos ou desconhecidos retornam `422`.
 
 `search` faz busca parcial no nome sem diferenciar maiusculas.
@@ -39,9 +40,23 @@ precedencia sobre `only_credit_card`.
       "status": "PENDING",
       "expected_on": "2026-11-10",
       "settled_on": null,
-      "account_id": "00000000-0000-0000-0000-000000000001",
-      "credit_card_id": null,
-      "subcategory_id": null,
+      "account": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "name": "Conta principal",
+        "type": "CHECKING",
+        "is_active": true,
+        "icon": null,
+        "color": null,
+        "agency": null,
+        "description": null,
+        "account_number": null,
+        "financial_institution": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "deleted_at": null
+      },
+      "credit_card": null,
+      "subcategory": null,
       "transaction_series_id": "00000000-0000-0000-0000-000000000002",
       "series_name": "Assinatura",
       "series_kind": "OPEN",
@@ -61,6 +76,14 @@ precedencia sobre `only_credit_card`.
   }
 }
 ```
+
+Todas as fontes retornam `account` como `AccountSchema`, `credit_card` como
+`CreditCardSchema | null` e `subcategory` como `SubcategorySchema | null`,
+em vez dos respectivos IDs na raiz. Projecoes usam os objetos da serie;
+agendamentos usam seus proprios relacionamentos, inclusive quando alterados.
+O repository carrega esses relacionamentos antes da serializacao, sem lazy loading.
+Os filtros de entrada continuam recebendo UUIDs em `account_id`, `credit_card_id`
+e `subcategory_id`.
 
 Os filtros herdam `FilterPage`, seguindo o padrao de transactions: `page` e
 `limit`, ou `offset` e `limit`, ativam `CustomLimitOffsetPage` (`items` e `meta`).

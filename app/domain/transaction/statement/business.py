@@ -99,9 +99,9 @@ def project_series(
                     direction=series.direction,
                     status=TransactionStatusEnum.PENDING,
                     expected_on=expected,
-                    account_id=series.account_id,
-                    credit_card_id=series.credit_card_id,
-                    subcategory_id=series.subcategory_id,
+                    account=series.account,
+                    credit_card=series.credit_card,
+                    subcategory=series.subcategory,
                     transaction_series_id=series.id,
                     series_name=series.name,
                     series_kind=series.kind,
@@ -117,18 +117,19 @@ def project_series(
 def _matches(entry: StatementEntrySchema, filters: StatementFilterSchema) -> bool:
     if not filters.start_date <= entry.expected_on <= filters.end_date:
         return False
-    for field in (
-        "account_id",
-        "credit_card_id",
-        "subcategory_id",
-        "direction",
-        "status",
+    for relation, identifier in (
+        (entry.account, filters.account_id),
+        (entry.credit_card, filters.credit_card_id),
+        (entry.subcategory, filters.subcategory_id),
     ):
+        if identifier is not None and (relation is None or relation.id != identifier):
+            return False
+    for field in ("direction", "status"):
         value = getattr(filters, field)
         if value is not None and getattr(entry, field) != value:
             return False
     if filters.credit_card_id is None and filters.only_credit_card is not None:
-        if (entry.credit_card_id is not None) != filters.only_credit_card:
+        if (entry.credit_card is not None) != filters.only_credit_card:
             return False
     return filters.search is None or filters.search.casefold() in entry.name.casefold()
 
