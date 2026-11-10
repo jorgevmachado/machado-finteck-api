@@ -3,14 +3,14 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasPath, BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.account.schema import AccountSchema
 from app.domain.category import SubcategorySchema
 from app.domain.credit_card.schema import CreditCardSchema
+from app.domain.transaction.series.schema import TransactionSeriesSchema
 from app.models import (
     TransactionDirectionEnum,
-    TransactionFrequencyUnitEnum,
     TransactionKindEnum,
     TransactionStatusEnum,
 )
@@ -44,7 +44,7 @@ class StatementFilterSchema(FilterPage):
 
 
 class StatementEntrySchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, validate_by_name=True)
 
     source: Literal["TRANSACTION", "SCHEDULED", "PROJECTED"] = "TRANSACTION"
     id: UUID | None = None
@@ -58,7 +58,16 @@ class StatementEntrySchema(BaseModel):
     account: AccountSchema
     credit_card: CreditCardSchema | None = None
     subcategory: SubcategorySchema | None = None
-    transaction_series_id: UUID | None = None
+    subcategory_name: str | None = Field(
+        default=None, validation_alias=AliasPath("subcategory", "name")
+    )
+    category_id: UUID | None = Field(
+        default=None, validation_alias=AliasPath("subcategory", "category_id")
+    )
+    category_name: str | None = Field(
+        default=None, validation_alias=AliasPath("subcategory", "category", "name")
+    )
+    transaction_serie: TransactionSeriesSchema | None = None
     series_name: str | None = None
     series_kind: TransactionKindEnum | None = None
     installments: int | None = None
@@ -66,22 +75,20 @@ class StatementEntrySchema(BaseModel):
     occurrence_on: date | None = None
 
 
-class StatementSeriesSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class StatementSeriesSchema(TransactionSeriesSchema):
+    """Stored series DTO with the stricter invariants required for projection."""
 
-    id: UUID
-    name: str
-    note: str | None
-    value: Decimal
-    direction: TransactionDirectionEnum
-    account: AccountSchema
-    credit_card: CreditCardSchema | None = None
-    subcategory: SubcategorySchema | None = None
-    kind: TransactionKindEnum
-    frequency_unit: TransactionFrequencyUnitEnum
+    model_config = ConfigDict(from_attributes=True, validate_by_name=True)
+
+    note: str | None = Field(...)
+    end_date: date | None = Field(...)
+    category_id: UUID | None = Field(
+        default=None, validation_alias=AliasPath("subcategory", "category_id")
+    )
+    category_name: str | None = Field(
+        default=None, validation_alias=AliasPath("subcategory", "category", "name")
+    )
     frequency_interval: int = Field(gt=0)
-    start_date: date
-    end_date: date | None
     installments: int | None = Field(default=None, gt=0)
     week_day: int | None = Field(default=None, ge=1, le=7)
     day_of_month: int | None = Field(default=None, ge=1, le=31)

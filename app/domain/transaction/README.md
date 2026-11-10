@@ -57,7 +57,45 @@ precedencia sobre `only_credit_card`.
       },
       "credit_card": null,
       "subcategory": null,
-      "transaction_series_id": "00000000-0000-0000-0000-000000000002",
+      "subcategory_name": null,
+      "category_id": null,
+      "category_name": null,
+      "transaction_serie": {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "name": "Assinatura",
+        "note": null,
+        "kind": "OPEN",
+        "value": "100.00",
+        "month": null,
+        "account": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "name": "Conta principal",
+          "type": "CHECKING",
+          "is_active": true,
+          "icon": null,
+          "color": null,
+          "agency": null,
+          "description": null,
+          "account_number": null,
+          "financial_institution": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": null,
+          "deleted_at": null
+        },
+        "week_day": null,
+        "end_date": null,
+        "direction": "OUT",
+        "start_date": "2026-01-10",
+        "credit_card": null,
+        "subcategory": null,
+        "day_of_month": 10,
+        "installments": null,
+        "frequency_unit": "MONTH",
+        "frequency_interval": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "deleted_at": null
+      },
       "series_name": "Assinatura",
       "series_kind": "OPEN",
       "installments": null,
@@ -85,6 +123,18 @@ O repository carrega esses relacionamentos antes da serializacao, sem lazy loadi
 Os filtros de entrada continuam recebendo UUIDs em `account_id`, `credit_card_id`
 e `subcategory_id`.
 
+`subcategory_name`, `category_id` e `category_name` sao preenchidos a partir de
+`subcategory` (e da `category` a que ela pertence) em todas as fontes. Sem
+subcategoria, os tres ficam nulos. Para agendamentos, vem do relacionamento
+`ScheduledTransaction.subcategory`; para projecoes, da serie projetada.
+
+`transaction_serie` traz a serie completa como `TransactionSeriesSchema`
+(incluindo `account`, `credit_card` e `subcategory` da serie) e substitui o
+antigo `transaction_series_id`. Para agendamentos, a serie vem de
+`ScheduledTransaction.transaction_serie`; para projecoes, do objeto projetado.
+Avulsas retornam `transaction_serie: null`. Os campos planos `series_name`,
+`series_kind` e `installments` continuam disponiveis.
+
 Os filtros herdam `FilterPage`, seguindo o padrao de transactions: `page` e
 `limit`, ou `offset` e `limit`, ativam `CustomLimitOffsetPage` (`items` e `meta`).
 `page=1` e a primeira pagina; `page` tem precedencia sobre `offset`.
@@ -103,9 +153,9 @@ identificador e indice.
 
 - `TRANSACTION`: avulsa persistida, com UUID e campos de serie nulos.
 - `SCHEDULED`: ocorrencia persistida; prevalece sobre a projecao do mesmo
-  par `(transaction_series_id, occurrence_index)`.
+  par `(transaction_serie.id, occurrence_index)`.
 - `PROJECTED`: ocorrencia calculada em memoria; `id=null` e identidade pelo
-  par `(transaction_series_id, occurrence_index)`, a partir de **1**.
+  par `(transaction_serie.id, occurrence_index)`, a partir de **1**.
   Nao sao gerados UUIDs aleatorios para projecoes.
 
 A serie e uma regra e nao gera uma linha adicional no extrato.

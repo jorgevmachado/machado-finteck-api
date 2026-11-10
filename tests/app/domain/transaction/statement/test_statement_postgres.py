@@ -86,6 +86,13 @@ async def test_statement_with_real_postgres_and_moved_occurrence(request):
                 assert entry["account"]["id"] == str(account.id)
                 assert entry["credit_card"] is None
                 assert entry["subcategory"] is None
+                assert entry["subcategory_name"] is None
+                assert entry["category_id"] is None
+                assert entry["category_name"] is None
+                assert "transaction_series_id" not in entry
+                assert entry["transaction_serie"]["id"] == str(series.id)
+                assert entry["transaction_serie"]["name"] == "Notebook"
+                assert entry["transaction_serie"]["kind"] == "CLOSED"
                 assert (
                     not {"account_id", "credit_card_id", "subcategory_id"}
                     & entry.keys()

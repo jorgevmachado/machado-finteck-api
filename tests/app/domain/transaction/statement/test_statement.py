@@ -31,6 +31,7 @@ from app.domain.transaction.statement.schema import (
 from app.domain.transaction.statement.service import StatementService
 from app.models import (
     Account,
+    Category,
     CreditCard,
     ScheduledTransaction,
     Subcategory,
@@ -80,10 +81,14 @@ def make_card(user_id, card_id):
     return card
 
 
-def make_subcategory(subcategory_id):
-    subcategory = Subcategory(name="Groceries", order=1)
+def make_subcategory(
+    subcategory_id, user_id=None, name="Groceries", category_name="Essentials"
+):
+    category = Category(user_id=user_id or uuid4(), name=category_name)
+    subcategory = Subcategory(name=name, order=1)
     subcategory.id = subcategory_id
-    subcategory.category_id = uuid4()
+    subcategory.category_id = category.id
+    subcategory.category = category
     return subcategory
 
 
@@ -108,7 +113,9 @@ def make_series(user_id, **kwargs):
         make_card(user_id, entity.credit_card_id) if entity.credit_card_id else None
     )
     entity.subcategory = (
-        make_subcategory(entity.subcategory_id) if entity.subcategory_id else None
+        make_subcategory(entity.subcategory_id, user_id=user_id)
+        if entity.subcategory_id
+        else None
     )
     return entity
 
@@ -264,7 +271,34 @@ def test_projection_obeys_calendar_anchors_intervals_and_limits(
         assert entry.settled_on is None
         assert entry.occurrence_on == entry.expected_on
         assert entry.value == Decimal("100.00")
-        assert entry.transaction_series_id == entity.id
+        assert entry.transaction_serie is not None
+        assert entry.transaction_serie.id == entity.id
+        assert entry.transaction_serie.name == entity.name
+
+
+def test_projection_copies_subcategory_and_category_names(user):
+    subcategory_id = uuid4()
+    entity = make_series(user.id, subcategory_id=subcategory_id)
+    entries = projected(entity, period())
+
+    assert entries
+    for entry in entries:
+        assert entry.subcategory is not None
+        assert entry.subcategory_name == "Groceries"
+        assert entry.category_id == entity.subcategory.category_id
+        assert entry.category_name == "Essentials"
+
+
+def test_projection_leaves_category_fields_null_without_subcategory(user):
+    entity = make_series(user.id)
+    entries = projected(entity, period())
+
+    assert entries
+    for entry in entries:
+        assert entry.subcategory is None
+        assert entry.subcategory_name is None
+        assert entry.category_id is None
+        assert entry.category_name is None
 
 
 @pytest.mark.parametrize(
@@ -301,6 +335,18 @@ async def statement_session():
         )
         # PostgreSQL-specific category constraints are covered by integration tests.
         metadata = MetaData()
+        Table(
+            "categories",
+            metadata,
+            *(
+                Column(
+                    column.name,
+                    String() if column.name == "name" else column.type,
+                    primary_key=column.primary_key,
+                )
+                for column in Category.__table__.columns
+            ),
+        )
         Table(
             "subcategories",
             metadata,
@@ -368,7 +414,7 @@ def make_scheduled(entity, **kwargs):
     scheduled.subcategory = (
         entity.subcategory
         if scheduled.subcategory_id == entity.subcategory_id
-        else make_subcategory(scheduled.subcategory_id)
+        else make_subcategory(scheduled.subcategory_id, user_id=scheduled.user_id)
         if scheduled.subcategory_id
         else None
     )
@@ -399,7 +445,7 @@ async def test_statement_merges_overrides_and_moved_dates_without_writing(
         november = await service.list_all(user=user, page_filter=period())
         assert november.meta.total == 1
         assert november.items[0].source == "TRANSACTION"
-        assert november.items[0].transaction_series_id is None
+        assert november.items[0].transaction_serie is None
         december = await service.list_all(
             user=user, page_filter=period("2026-12-01", "2026-12-31")
         )
@@ -412,7 +458,10 @@ async def test_statement_merges_overrides_and_moved_dates_without_writing(
         assert recorded.expected_on == date(2026, 12, 5)
         assert recorded.value == Decimal("125.00")
         assert recorded.series_name == "Subscription"
-        assert recorded.transaction_series_id == entity_id
+        assert recorded.transaction_serie is not None
+        assert recorded.transaction_serie.id == entity_id
+        assert recorded.transaction_serie.kind == entity.kind
+        assert recorded.transaction_serie.account.id == entity.account_id
         assert all(
             statement.lstrip().upper().startswith("SELECT") for statement in statements
         )
@@ -661,14 +710,16 @@ def test_order_is_deterministic_for_same_date_and_multiple_sources(user):
         update={
             "source": "SCHEDULED",
             "id": uuid4(),
-            "transaction_series_id": uuid4(),
+            "transaction_serie": projection.transaction_serie.model_copy(
+                update={"id": uuid4()}
+            ),
         }
     )
     transaction = projection.model_copy(
         update={
             "source": "TRANSACTION",
             "id": uuid4(),
-            "transaction_series_id": None,
+            "transaction_serie": None,
         }
     )
     result = combine_statement(
@@ -828,6 +879,12 @@ async def test_http_real_statement_service_returns_projected_entries_without_ins
     assert entry["subcategory"] is None
     assert not {"account_id", "credit_card_id", "subcategory_id"} & entry.keys()
     assert entry["occurrence_index"] == 11
+    assert "transaction_series_id" not in entry
+    assert entry["transaction_serie"]["id"] == str(entity.id)
+    assert entry["transaction_serie"]["name"] == "Subscription"
+    assert entry["transaction_serie"]["kind"] == "OPEN"
+    assert entry["transaction_serie"]["frequency_unit"] == "MONTH"
+    assert entry["transaction_serie"]["account"]["id"] == str(entity.account_id)
     assert list(await statement_session.scalars(select(ScheduledTransaction))) == []
 
 
@@ -854,6 +911,7 @@ async def test_statement_returns_nested_relations_for_each_source(
         statement_session.add(make_scheduled(entity))
     await statement_session.commit()
     account_id = entity.account_id
+    category_id = entity.subcategory.category_id if entity.subcategory else None
     statement_session.expunge_all()
 
     app = FastAPI()
@@ -880,14 +938,26 @@ async def test_statement_returns_nested_relations_for_each_source(
     assert entry["account"]["name"] == "Main account"
     assert entry["account"]["type"] == "CHECKING"
     assert not {"account_id", "credit_card_id", "subcategory_id"} & entry.keys()
+    if source == "TRANSACTION":
+        assert entry["transaction_serie"] is None
+    else:
+        assert entry["transaction_serie"]["id"] == str(entity.id)
+        assert entry["transaction_serie"]["name"] == "Subscription"
+        assert entry["transaction_serie"]["account"]["id"] == str(account_id)
     if with_optional_relations:
         assert entry["credit_card"]["id"] == str(relations["credit_card_id"])
         assert entry["credit_card"]["brand"] == "VISA"
         assert entry["subcategory"]["id"] == str(relations["subcategory_id"])
         assert entry["subcategory"]["name"] == "Groceries"
+        assert entry["subcategory_name"] == "Groceries"
+        assert entry["category_id"] == str(category_id)
+        assert entry["category_name"] == "Essentials"
     else:
         assert entry["credit_card"] is None
         assert entry["subcategory"] is None
+        assert entry["subcategory_name"] is None
+        assert entry["category_id"] is None
+        assert entry["category_name"] is None
 
 
 @pytest.mark.asyncio
@@ -924,6 +994,89 @@ async def test_repository_loads_relations_before_synchronous_serialization(
         assert dto.account == series_dto.account
         assert dto.credit_card == series_dto.credit_card
         assert dto.subcategory == series_dto.subcategory
+    scheduled_dto = StatementEntrySchema.model_validate(overrides[0][0])
+    assert scheduled_dto.transaction_serie is not None
+    assert scheduled_dto.transaction_serie.id == series_id
+    assert scheduled_dto.transaction_serie.account.name == "Main account"
+    assert scheduled_dto.transaction_serie.credit_card.name == "Main card"
+    assert scheduled_dto.transaction_serie.subcategory.name == "Groceries"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_occurrence_keeps_own_relations_apart_from_series_relations(
+    statement_session, user
+):
+    entity = make_series(user.id, credit_card_id=uuid4(), subcategory_id=uuid4())
+    moved_account_id = uuid4()
+    moved = make_scheduled(entity, account_id=moved_account_id)
+    statement_session.add_all([entity, moved])
+    await statement_session.commit()
+    series_id = entity.id
+    statement_session.expunge_all()
+
+    scheduled = await StatementRepository(statement_session).scheduled(
+        user_id=user.id, filters=period(), projected_ranges={series_id: (11, 11)}
+    )
+    statement_session.expunge_all()
+    dto = StatementEntrySchema.model_validate(scheduled[0][0])
+
+    assert dto.account.id == moved_account_id
+    assert dto.transaction_serie is not None
+    assert dto.transaction_serie.id == series_id
+    assert dto.transaction_serie.account.id == entity.account_id
+    assert dto.transaction_serie.account.id != dto.account.id
+
+
+@pytest.mark.asyncio
+async def test_scheduled_flat_category_fields_come_from_occurrence_not_series(
+    statement_session, user
+):
+    entity = make_series(user.id, subcategory_id=uuid4())
+    moved_subcategory_id = uuid4()
+    moved = make_scheduled(entity, subcategory_id=moved_subcategory_id)
+    statement_session.add_all([entity, moved])
+    await statement_session.commit()
+    series_id = entity.id
+    statement_session.expunge_all()
+
+    scheduled = await StatementRepository(statement_session).scheduled(
+        user_id=user.id, filters=period(), projected_ranges={series_id: (11, 11)}
+    )
+    statement_session.expunge_all()
+    dto = StatementEntrySchema.model_validate(scheduled[0][0])
+
+    assert dto.subcategory is not None
+    assert dto.subcategory_name == "Groceries"
+    assert dto.category_name == "Essentials"
+    assert dto.category_id == moved.subcategory.category_id
+    assert dto.transaction_serie is not None
+    assert dto.transaction_serie.subcategory is not None
+    assert dto.transaction_serie.subcategory.id == entity.subcategory_id
+
+
+@pytest.mark.asyncio
+async def test_scheduled_without_subcategory_leaves_flat_fields_null(
+    statement_session, user
+):
+    entity = make_series(user.id, subcategory_id=uuid4())
+    moved = make_scheduled(entity, subcategory_id=None)
+    statement_session.add_all([entity, moved])
+    await statement_session.commit()
+    series_id = entity.id
+    statement_session.expunge_all()
+
+    scheduled = await StatementRepository(statement_session).scheduled(
+        user_id=user.id, filters=period(), projected_ranges={series_id: (11, 11)}
+    )
+    statement_session.expunge_all()
+    dto = StatementEntrySchema.model_validate(scheduled[0][0])
+
+    assert dto.subcategory is None
+    assert dto.subcategory_name is None
+    assert dto.category_id is None
+    assert dto.category_name is None
+    assert dto.transaction_serie is not None
+    assert dto.transaction_serie.subcategory is not None
 
 
 @pytest.mark.asyncio

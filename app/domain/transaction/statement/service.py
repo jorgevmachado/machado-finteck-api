@@ -44,13 +44,14 @@ class StatementService:
             ]
             ranges = {}
             for entry in projections:
-                assert entry.transaction_series_id is not None
+                assert entry.transaction_serie is not None
                 assert entry.occurrence_index is not None
+                series_id = entry.transaction_serie.id
                 first, _ = ranges.get(
-                    entry.transaction_series_id,
+                    series_id,
                     (entry.occurrence_index, entry.occurrence_index),
                 )
-                ranges[entry.transaction_series_id] = (first, entry.occurrence_index)
+                ranges[series_id] = (first, entry.occurrence_index)
             transactions = await self.repository.transactions(
                 user_id=user.id, filters=filters
             )

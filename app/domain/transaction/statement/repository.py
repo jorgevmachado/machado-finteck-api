@@ -2,10 +2,15 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import lazyload, selectinload
+from sqlalchemy.orm import contains_eager, lazyload, selectinload
 
 from app.core.repository import BaseRepository
-from app.models import ScheduledTransaction, Transaction, TransactionSeries
+from app.models import (
+    ScheduledTransaction,
+    Subcategory,
+    Transaction,
+    TransactionSeries,
+)
 
 from app.domain.transaction.statement.schema import StatementFilterSchema
 
@@ -24,7 +29,9 @@ class StatementRepository(BaseRepository[Transaction]):
                     lazyload("*"),
                     selectinload(Transaction.account),
                     selectinload(Transaction.credit_card),
-                    selectinload(Transaction.subcategory),
+                    selectinload(Transaction.subcategory).selectinload(
+                        Subcategory.category
+                    ),
                 )
                 .where(
                     Transaction.user_id == user_id,
@@ -47,7 +54,9 @@ class StatementRepository(BaseRepository[Transaction]):
                     lazyload("*"),
                     selectinload(TransactionSeries.account),
                     selectinload(TransactionSeries.credit_card),
-                    selectinload(TransactionSeries.subcategory),
+                    selectinload(TransactionSeries.subcategory).selectinload(
+                        Subcategory.category
+                    ),
                 )
                 .where(
                     TransactionSeries.user_id == user_id,
@@ -86,7 +95,18 @@ class StatementRepository(BaseRepository[Transaction]):
                 lazyload("*"),
                 selectinload(ScheduledTransaction.account),
                 selectinload(ScheduledTransaction.credit_card),
-                selectinload(ScheduledTransaction.subcategory),
+                selectinload(ScheduledTransaction.subcategory).selectinload(
+                    Subcategory.category
+                ),
+                contains_eager(ScheduledTransaction.transaction_serie).selectinload(
+                    TransactionSeries.account
+                ),
+                contains_eager(ScheduledTransaction.transaction_serie).selectinload(
+                    TransactionSeries.credit_card
+                ),
+                contains_eager(ScheduledTransaction.transaction_serie)
+                .selectinload(TransactionSeries.subcategory)
+                .selectinload(Subcategory.category),
             )
             .where(
                 ScheduledTransaction.user_id == user_id,

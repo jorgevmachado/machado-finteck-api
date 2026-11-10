@@ -1,6 +1,7 @@
 from calendar import monthrange
 from collections.abc import Iterable
 from datetime import date, timedelta
+from typing import TypedDict
 from uuid import UUID
 
 from app.domain.transaction.statement.schema import (
@@ -59,6 +60,32 @@ def _occurrence_at(
     return _month_at(first, months, series.day_of_month or series.start_date.day)
 
 
+class _FlatCategory(TypedDict):
+    subcategory_name: str | None
+    category_id: UUID | None
+    category_name: str | None
+
+
+def _flat_subcategory(series: StatementSeriesSchema) -> _FlatCategory:
+    """Flatten the series subcategory, its only source of category data."""
+    return {
+        "subcategory_name": series.subcategory.name if series.subcategory else None,
+        "category_id": series.category_id,
+        "category_name": series.category_name,
+    }
+
+
+def _series_id(entry: StatementEntrySchema) -> UUID | None:
+    return entry.transaction_serie.id if entry.transaction_serie else None
+
+
+def _occurrence_key(entry: StatementEntrySchema) -> tuple[UUID, int | None]:
+    series_id = _series_id(entry)
+    if series_id is None:
+        raise ValueError("Series occurrences require a transaction_serie")
+    return (series_id, entry.occurrence_index)
+
+
 def project_series(
     series: StatementSeriesSchema, filters: StatementFilterSchema
 ) -> list[StatementEntrySchema]:
@@ -102,7 +129,8 @@ def project_series(
                     account=series.account,
                     credit_card=series.credit_card,
                     subcategory=series.subcategory,
-                    transaction_series_id=series.id,
+                    **_flat_subcategory(series),
+                    transaction_serie=series,
                     series_name=series.name,
                     series_kind=series.kind,
                     installments=series.installments,
@@ -141,19 +169,15 @@ def combine_statement(
     scheduled: Iterable[StatementEntrySchema],
     filters: StatementFilterSchema,
 ) -> list[StatementEntrySchema]:
-    overrides: dict[tuple[UUID | None, int | None], StatementEntrySchema] = {}
+    overrides: dict[tuple[UUID, int | None], StatementEntrySchema] = {}
     for entry in scheduled:
-        key = (entry.transaction_series_id, entry.occurrence_index)
+        key = _occurrence_key(entry)
         if key in overrides:
             raise ValueError("Duplicate scheduled transactions for the same occurrence")
         overrides[key] = entry
     entries = [
         *transactions,
-        *(
-            entry
-            for entry in projections
-            if (entry.transaction_series_id, entry.occurrence_index) not in overrides
-        ),
+        *(entry for entry in projections if _occurrence_key(entry) not in overrides),
         *overrides.values(),
     ]
     priority = {"TRANSACTION": 0, "SCHEDULED": 1, "PROJECTED": 2}
@@ -161,7 +185,7 @@ def combine_statement(
     filtered.sort(
         key=lambda entry: (
             priority[entry.source],
-            str(entry.transaction_series_id or entry.id),
+            str(_series_id(entry) or entry.id),
             entry.occurrence_index or 0,
         )
     )
