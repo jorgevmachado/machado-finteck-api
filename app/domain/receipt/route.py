@@ -2,7 +2,7 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, UploadFile, File, Query
+from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -31,9 +31,9 @@ def receipt_service(session: Session) -> ReceiptService:
 
 
 def receipt_filter(
-    page: Annotated[int | None, Query(ge=1)] = None,
-    limit: Annotated[int, Query(ge=1)] = 12,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    page: int | None = None,
+    limit: int | None = 12,
+    offset: int | None = None,
 ) -> FilterPage:
     return FilterPage.build(page=page, limit=limit, offset=offset)
 

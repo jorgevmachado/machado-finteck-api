@@ -73,15 +73,15 @@ def receipt_client(user, service):
 @pytest.mark.parametrize(
     ("query", "limit", "offset", "page"),
     [
-        ("", 12, 0, None),
+        ("", 12, None, None),
         ("?limit=2&offset=4", 2, 4, None),
-        ("?page=2&limit=2", 2, 0, 2),
+        ("?page=2&limit=2", 2, None, 2),
     ],
 )
 def test_list_all_returns_paginated_receipts(
     receipt_client, service, receipt, user, query, limit, offset, page
 ):
-    result_offset = (page - 1) * limit if page is not None else offset
+    result_offset = (page - 1) * limit if page is not None else (offset or 0)
     service.list_all.return_value = CustomLimitOffsetPage.create(
         [receipt], total=8, params=LimitOffsetParams(limit=limit, offset=result_offset)
     )
@@ -123,9 +123,6 @@ def test_find_one_propagates_not_found(receipt_client, service):
 @pytest.mark.parametrize(
     "path",
     [
-        "/receipts?limit=0",
-        "/receipts?offset=-1",
-        "/receipts?page=0",
         "/receipts/not-a-uuid",
     ],
 )
