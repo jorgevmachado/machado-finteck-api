@@ -703,6 +703,47 @@ def test_duplicate_overrides_are_reported_instead_of_silently_discarded(user):
         )
 
 
+def test_scheduled_entry_without_series_is_rejected_as_invalid_occurrence(user):
+    entity = make_series(user.id)
+    entry = projected(entity, period())[0].model_copy(
+        update={"source": "SCHEDULED", "transaction_serie": None}
+    )
+
+    with pytest.raises(
+        ValueError, match="Series occurrences require a transaction_serie"
+    ):
+        combine_statement(
+            transactions=[], projections=[], scheduled=[entry], filters=period()
+        )
+
+
+def test_projection_without_series_is_rejected_as_invalid_occurrence(user):
+    entity = make_series(user.id)
+    entry = projected(entity, period())[0].model_copy(
+        update={"transaction_serie": None}
+    )
+
+    with pytest.raises(
+        ValueError, match="Series occurrences require a transaction_serie"
+    ):
+        combine_statement(
+            transactions=[], projections=[entry], scheduled=[], filters=period()
+        )
+
+
+def test_transaction_without_series_is_kept_because_it_has_no_occurrence(user):
+    entity = make_series(user.id)
+    entry = projected(entity, period())[0].model_copy(
+        update={"source": "TRANSACTION", "transaction_serie": None}
+    )
+
+    result = combine_statement(
+        transactions=[entry], projections=[], scheduled=[], filters=period()
+    )
+
+    assert [item.id for item in result] == [entry.id]
+
+
 def test_order_is_deterministic_for_same_date_and_multiple_sources(user):
     entity = make_series(user.id)
     projection = projected(entity, period())[0]

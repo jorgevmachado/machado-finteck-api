@@ -265,7 +265,8 @@ async def test_read_failure_is_logged_and_propagated(user, service, operation):
     with (
         patch("app.core.service.base.log_service_success") as success,
         patch(
-            "app.core.service.base.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
         pytest.raises(HTTPException) as caught,
     ):
@@ -576,3 +577,193 @@ async def test_batch_continues_after_failed_upload_and_counts_statuses(
     assert result.items[0].file_name == files[0].filename
     assert result.items[1] is uploaded
     assert service.upload.await_count == 2
+
+
+@pytest.fixture
+def update_service(service, receipt):
+    service.repository.find_by.return_value = receipt
+    service.payment_service = AsyncMock()
+    return service
+
+
+async def test_update_receipt_persists_converted_data_and_returns_saved_entity(
+    update_service, receipt, user, confirm_payload
+):
+    service = update_service
+    original_id = receipt.id
+
+    result = await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert result is receipt
+    assert receipt.id == original_id
+    assert receipt.status == ReceiptStatusEnum.RECEIVED
+    assert receipt.data["beneficiary"]["value"] == confirm_payload.beneficiary
+    assert receipt.data["paid_amount"]["status"] == DataStatusEnum.FOUND
+    assert (
+        receipt.data["payment_date"]["value"]
+        == confirm_payload.payment_date.isoformat()
+    )
+    service.payment_service.check_receipt.assert_awaited_once_with(receipt.id, user)
+    service.repository.save.assert_awaited_once_with(entity=receipt, user_id=user.id)
+
+
+async def test_update_receipt_marks_failed_when_required_field_is_missing(
+    update_service, receipt, user, confirm_payload
+):
+    service = update_service
+    confirm_payload.beneficiary = None
+
+    result = await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert result is receipt
+    assert receipt.status == ReceiptStatusEnum.FAILED
+    assert receipt.data["beneficiary"]["status"] == DataStatusEnum.NOT_FOUND
+    service.repository.save.assert_awaited_once_with(entity=receipt, user_id=user.id)
+
+
+async def test_update_receipt_does_not_touch_other_receipt_fields(
+    update_service, receipt, user, confirm_payload
+):
+    service = update_service
+    original = {
+        "file_name": receipt.file_name,
+        "file_type": receipt.file_type,
+        "file_size": receipt.file_size,
+        "file_hash": receipt.file_hash,
+    }
+
+    await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert {name: getattr(receipt, name) for name in original} == original
+
+
+async def test_update_receipt_returns_not_found_without_saving(
+    update_service, user, confirm_payload
+):
+    service = update_service
+    service.repository.find_by.return_value = None
+
+    with pytest.raises(HTTPException) as caught:
+        await service.update_receipt(uuid4(), user, confirm_payload)
+
+    assert caught.value.status_code == 404
+    service.repository.save.assert_not_awaited()
+    service.payment_service.check_receipt.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "status", [ReceiptStatusEnum.PROCESSED, ReceiptStatusEnum.PROCESSING]
+)
+async def test_update_receipt_rejects_processed_or_processing_receipt(
+    update_service, receipt, user, confirm_payload, status
+):
+    service = update_service
+    receipt.status = status
+    original_data = receipt.data
+
+    with pytest.raises(HTTPException) as caught:
+        await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail == (
+        "Receipt is processed or in processing and cannot be updated"
+    )
+    assert receipt.data == original_data
+    assert receipt.status == status
+    service.repository.save.assert_not_awaited()
+    service.payment_service.check_receipt.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "status", [ReceiptStatusEnum.RECEIVED, ReceiptStatusEnum.FAILED]
+)
+async def test_update_receipt_allows_received_and_failed_receipts(
+    update_service, receipt, user, confirm_payload, status
+):
+    service = update_service
+    receipt.status = status
+
+    result = await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert result is receipt
+    assert receipt.status == ReceiptStatusEnum.RECEIVED
+
+
+async def test_update_receipt_rejects_receipt_that_already_has_a_payment(
+    update_service, receipt, user, confirm_payload
+):
+    service = update_service
+    service.payment_service.check_receipt.side_effect = HTTPException(
+        409, "Receipt already has a payment"
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "Receipt already has a payment"
+    service.repository.save.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["check_receipt", "save"])
+async def test_update_receipt_propagates_failures_without_reporting_success(
+    update_service, receipt, user, confirm_payload, operation
+):
+    service = update_service
+    dependency = (
+        service.payment_service.check_receipt
+        if operation == "check_receipt"
+        else service.repository.save
+    )
+    dependency.side_effect = RuntimeError("database failure")
+
+    with (
+        patch("app.core.service.base.log_service_success") as success,
+        pytest.raises(HTTPException) as caught,
+    ):
+        await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert caught.value.status_code == 500
+    assert all(
+        entry.kwargs["operation"] != "update_receipt"
+        for entry in success.call_args_list
+    )
+
+
+async def test_update_receipt_commit_failure_never_reports_success(
+    update_service, receipt, user, confirm_payload
+):
+    service = update_service
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+        raise RuntimeError("commit failed")
+
+    service.repository.transaction = transaction
+
+    with (
+        patch("app.core.service.base.log_service_success") as success,
+        pytest.raises(HTTPException) as caught,
+    ):
+        await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert caught.value.status_code == 500
+    assert all(
+        entry.kwargs["operation"] != "update_receipt"
+        for entry in success.call_args_list
+    )
+
+
+async def test_update_receipt_preserves_category_sent_in_payload(
+    update_service, receipt, user, confirm_payload
+):
+    service = update_service
+    confirm_payload.category = "Utilities"
+
+    await service.update_receipt(receipt.id, user, confirm_payload)
+
+    assert receipt.data["category"] == {
+        "value": "Utilities",
+        "status": DataStatusEnum.FOUND.value,
+    }

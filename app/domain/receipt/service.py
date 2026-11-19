@@ -19,7 +19,7 @@ from app.domain.receipt.file.file import (
     calculate_hash,
     validate_batch_size,
 )
-from app.domain.receipt.interpretation import Interpretation
+from app.domain.receipt.interpretation import Interpretation, Converter
 from app.domain.receipt.interpretation.schema import InterpretationResult
 from app.domain.receipt.payment.service import PaymentService
 from app.domain.receipt.repository import ReceiptRepository
@@ -227,6 +227,20 @@ class ReceiptService(BaseService[Receipt, ReceiptCreateSchema]):
                 )
             return receipt
 
+    async def validate_update_receipt(self, receipt_id: UUID, user: User) -> Receipt:
+        username = user.username
+        async with self._operation("validate_update_receipt", username, receipt_id):
+            receipt = await self.find_one(receipt_id=receipt_id, user=user)
+            if receipt.status in (
+                ReceiptStatusEnum.PROCESSED,
+                ReceiptStatusEnum.PROCESSING,
+            ):
+                raise HTTPException(
+                    status_code=HTTPStatus.CONFLICT,
+                    detail="Receipt is processed or in processing and cannot be updated",
+                )
+            return receipt
+
     async def confirm(
         self, receipt_id: UUID, user: User, payload: ReceiptConfirmSchema
     ):
@@ -272,3 +286,26 @@ class ReceiptService(BaseService[Receipt, ReceiptCreateSchema]):
                 receipt.status = ReceiptStatusEnum.PROCESSED
                 await self.repository.save(entity=receipt, user_id=user.id)
             return Message(message="Receipt confirmed successfully")
+
+    async def update_receipt(
+        self, receipt_id: UUID, user: User, payload: ReceiptConfirmSchema
+    ) -> Receipt:
+        username = user.username
+        async with self._operation("update_receipt", username, receipt_id):
+            receipt = await self.validate_update_receipt(receipt_id, user)
+            await self.payment_service.check_receipt(receipt_id, user)
+
+            converter = await asyncio.to_thread(
+                Converter, payload.model_dump(mode="json")
+            )
+            validated = await asyncio.to_thread(converter.result)
+
+            async with self.repository.transaction():
+                receipt.data = validated.data.model_dump(mode="json")
+                receipt.status = (
+                    ReceiptStatusEnum.RECEIVED
+                    if not validated.errors
+                    else ReceiptStatusEnum.FAILED
+                )
+
+                return await self.repository.save(entity=receipt, user_id=user.id)

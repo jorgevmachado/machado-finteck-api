@@ -81,3 +81,12 @@ async def find_one(receipt_id: UUID, service: Service, current_user: CurrentUser
 @router.post("/{receipt_id}/confirm", response_model=Message, status_code=HTTPStatus.OK)
 async def confirm_receipt(receipt_id: UUID, service: Service, current_user: CurrentUser, payload: ReceiptConfirmSchema):
     return await service.confirm(receipt_id=receipt_id, user=current_user, payload=payload)
+
+@router.put("/{receipt_id}", response_model=ReceiptSchema, status_code=HTTPStatus.OK)
+async def update_receipt(
+    receipt_id: UUID,
+    service: Service,
+    current_user: CurrentUser,
+    payload: ReceiptConfirmSchema,
+):
+    return await service.update_receipt(receipt_id=receipt_id, user=current_user, payload=payload)

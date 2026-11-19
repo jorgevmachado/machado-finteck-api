@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.exceptions import ResponseValidationError
 from fastapi.testclient import TestClient
 from fastapi_pagination import LimitOffsetParams
 
@@ -203,3 +204,100 @@ def test_confirm_route_requires_authentication(service, confirm_payload):
 
     assert response.status_code in (401, 403)
     service.confirm.assert_not_awaited()
+
+
+def test_update_receipt_route_delegates_payload_and_returns_receipt(
+    receipt_client, service, receipt, user, confirm_payload
+):
+    service.update_receipt.return_value = receipt
+
+    response = receipt_client.put(
+        f"/receipts/{receipt.id}", json=confirm_payload.model_dump(mode="json")
+    )
+
+    assert response.status_code == 200
+    assert response.json() == receipt.model_dump(mode="json")
+    service.update_receipt.assert_awaited_once_with(
+        receipt_id=receipt.id, user=user, payload=confirm_payload
+    )
+
+
+@pytest.mark.parametrize("status", [404, 409, 500])
+def test_update_receipt_route_preserves_service_errors(
+    receipt_client, service, confirm_payload, status
+):
+    service.update_receipt.side_effect = HTTPException(status, "Update failed")
+
+    response = receipt_client.put(
+        f"/receipts/{uuid4()}", json=confirm_payload.model_dump(mode="json")
+    )
+
+    assert response.status_code == status
+    assert response.json() == {"detail": "Update failed"}
+
+
+@pytest.mark.parametrize("invalid", ["id", "payload"])
+def test_update_receipt_route_rejects_invalid_input(
+    receipt_client, service, confirm_payload, invalid
+):
+    receipt_id = "not-a-uuid" if invalid == "id" else str(uuid4())
+    payload = {} if invalid == "payload" else confirm_payload.model_dump(mode="json")
+
+    response = receipt_client.put(f"/receipts/{receipt_id}", json=payload)
+
+    assert response.status_code == 422
+    service.update_receipt.assert_not_awaited()
+
+
+def test_update_receipt_route_requires_authentication(service, confirm_payload):
+    app = FastAPI()
+    app.include_router(router, prefix="/receipts")
+    app.dependency_overrides[receipt_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.put(
+            f"/receipts/{uuid4()}", json=confirm_payload.model_dump(mode="json")
+        )
+
+    assert response.status_code in (401, 403)
+    service.update_receipt.assert_not_awaited()
+
+
+def test_update_receipt_route_rejects_response_that_is_not_a_receipt(
+    receipt_client, service, confirm_payload
+):
+    service.update_receipt.return_value = Message(
+        message="Receipt updated successfully"
+    )
+
+    with pytest.raises(ResponseValidationError):
+        receipt_client.put(
+            f"/receipts/{uuid4()}", json=confirm_payload.model_dump(mode="json")
+        )
+
+
+def test_update_receipt_route_rejects_blank_required_text(
+    receipt_client, service, confirm_payload
+):
+    payload = {**confirm_payload.model_dump(mode="json"), "beneficiary": "   "}
+
+    response = receipt_client.put(f"/receipts/{uuid4()}", json=payload)
+
+    assert response.status_code == 422
+    service.update_receipt.assert_not_awaited()
+
+
+def test_update_receipt_route_accepts_and_strips_category(
+    receipt_client, service, receipt, confirm_payload
+):
+    service.update_receipt.return_value = receipt
+    payload = {
+        **confirm_payload.model_dump(mode="json"),
+        "category": "  Utilities  ",
+    }
+
+    response = receipt_client.put(f"/receipts/{receipt.id}", json=payload)
+
+    assert response.status_code == 200
+    sent = service.update_receipt.await_args.kwargs["payload"]
+    assert sent.category == "  Utilities  "

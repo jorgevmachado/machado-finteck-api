@@ -53,7 +53,11 @@ class Receipt:
         DateTime(timezone=True), nullable=False, default_factory=utcnow, init=False
     )
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None, init=False
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        onupdate=utcnow,
+        init=False,
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None, init=False
