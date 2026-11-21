@@ -313,7 +313,7 @@ class PaymentRepository(BaseRepository[Payment]):
     ):
         query = select(
             Institution.id.label("institution_id"),
-            Institution.name_code.label("institution"),
+            Institution.name.label("institution"),
             func.count(Payment.id).label("count"),
             func.coalesce(func.sum(Payment.amount), 0).label("total"),
         ).join(Payment.source_institution)
@@ -327,7 +327,7 @@ class PaymentRepository(BaseRepository[Payment]):
             beneficiary_id=beneficiary_id,
         )
 
-        query = query.group_by(Institution.id, Institution.name_code).order_by(
+        query = query.group_by(Institution.id, Institution.name).order_by(
             desc(func.sum(Payment.amount))
         )
 

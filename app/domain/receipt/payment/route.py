@@ -1,5 +1,6 @@
+from datetime import date
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -21,6 +22,10 @@ from app.shared.schemas import FilterPage
 
 router = APIRouter()
 
+PaymentOrderBy = Literal["payment_date", "amount", "created_at"]
+
+PaymentOrder = Literal["asc", "desc"]
+
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -34,8 +39,26 @@ def payment_filter(
     page: Annotated[int | None, Query(ge=1)] = None,
     limit: Annotated[int, Query(ge=1)] = 12,
     offset: Annotated[int, Query(ge=0)] = 0,
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+    payer: Annotated[str | None, Query()] = None,
+    subcategory: Annotated[str | None, Query()] = None,
+    source_institution: Annotated[str | None, Query()] = None,
+    order_by: Annotated[PaymentOrderBy | None, Query()] = None,
+    order: Annotated[PaymentOrder | None, Query()] = None,
 ) -> FilterPage:
-    return FilterPage.build(page=page, limit=limit, offset=offset)
+    return FilterPage.build(
+        page=page,
+        limit=limit,
+        offset=offset,
+        start_date=start_date,
+        end_date=end_date,
+        payer=payer,
+        subcategory=subcategory,
+        source_institution=source_institution,
+        order_by=order_by,
+        order=order,
+    )
 
 
 Service = Annotated[PaymentService, Depends(payment_service)]
