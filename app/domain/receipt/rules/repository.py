@@ -27,7 +27,7 @@ from app.core.repository import BaseRepository
 
 class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
     model = ReceiptInterpretationProfile
-    filter_fields = ("id", "name", "institution_code", "is_active")
+    filter_fields = ("id", "name", "institution_code", "institution_id", "is_active")
     relations = (
         selectinload(
             ReceiptInterpretationProfile.field_rules.and_(
@@ -181,13 +181,13 @@ class ReceiptRulesRepository(BaseRepository[ReceiptInterpretationProfile]):
             )
         )
 
-    async def find_by_code(
-        self, *, user_id: UUID | None, institution_code: str | None
+    async def find_by_institution(
+        self, *, user_id: UUID | None, institution_id: UUID | None
     ) -> ReceiptInterpretationProfile | None:
         return await self.session.scalar(
             select(self.model).where(
                 self.model.user_id == user_id,
-                self.model.institution_code == institution_code,
+                self.model.institution_id == institution_id,
                 *self._visibility(),
             )
         )

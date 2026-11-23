@@ -10,11 +10,10 @@ from testcontainers.community.postgres import PostgresContainer
 
 from app.core.database.base import table_registry
 from app.models import (
+    Institution,
     ReceiptFieldRule,
     ReceiptIdentificationRule,
     ReceiptInterpretationProfile,
-    Role,
-    User,
 )
 
 
@@ -31,9 +30,17 @@ def rule_payload():
 
 
 @pytest.fixture
-def profile(user, rule_payload):
+def institution(user):
+    return Institution(user_id=user.id, name="Banco", name_code="banco")
+
+
+@pytest.fixture
+def profile(user, institution, rule_payload):
     entity = ReceiptInterpretationProfile(
-        user_id=user.id, name="Banco", institution_code="BANK"
+        user_id=user.id,
+        name="Banco",
+        institution_id=institution.id,
+        institution_code="BANCO",
     )
     entity.field_rules.append(ReceiptFieldRule(profile_id=entity.id, **rule_payload))
     entity.identification_rules.append(
@@ -65,16 +72,9 @@ async def rules_postgres_session():
         engine = create_async_engine(url)
         try:
             async with engine.begin() as connection:
-                await connection.run_sync(
-                    table_registry.metadata.create_all,
-                    tables=[
-                        Role.__table__,
-                        User.__table__,
-                        ReceiptInterpretationProfile.__table__,
-                        ReceiptFieldRule.__table__,
-                        ReceiptIdentificationRule.__table__,
-                    ],
-                )
+                # `Institution` usa `lazy="selectin"` nas relationships de pagamento,
+                # então salvar uma instituição toca a cadeia inteira de tabelas.
+                await connection.run_sync(table_registry.metadata.create_all)
             async with async_sessionmaker(engine, expire_on_commit=False)() as session:
                 yield session
         finally:
@@ -85,7 +85,7 @@ async def rules_postgres_session():
 def rules_repository():
     repository = SimpleNamespace(
         find_by=AsyncMock(return_value=None),
-        find_by_code=AsyncMock(return_value=None),
+        find_by_institution=AsyncMock(return_value=None),
         list_all=AsyncMock(return_value=[]),
         save_profile=AsyncMock(),
         delete_profile=AsyncMock(),

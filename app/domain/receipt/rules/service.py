@@ -17,6 +17,7 @@ from app.domain.receipt.rules.configuration.engine import (
     SourceExtractionResult,
     extract_source,
 )
+from app.domain.institution.service import InstitutionService
 from app.domain.receipt.rules.field.schema import ReceiptFieldRuleCreateSchema
 from app.domain.receipt.rules.repository import ReceiptRulesRepository
 from app.domain.receipt.rules.schema import (
@@ -26,8 +27,10 @@ from app.domain.receipt.rules.schema import (
     ReceiptRulesSeedSchema,
     ReceiptRulesSeedEntrySchema,
 )
+from app.domain.receipt.rules.validate import normalize_code
 from app.models import (
     User,
+    Institution,
     ReceiptInterpretationProfile,
     ReceiptFieldRule,
     ReceiptIdentificationRule,
@@ -59,6 +62,11 @@ class ReceiptRulesService(
             schema_class=ReceiptRulesSchema,
             cache_prefix="rules",
         )
+
+    @property
+    def institution_service(self) -> InstitutionService:
+        # Lazy: mantém o construtor compatível com repositórios sem sessão (testes).
+        return InstitutionService.from_session(self.repository.session)
 
     def _translate_exception(self, exception: Exception) -> Exception:
         if isinstance(exception, ProfileReconciliationError):
@@ -95,20 +103,35 @@ class ReceiptRulesService(
             raise HTTPException(HTTPStatus.FORBIDDEN, "System profile is read-only")
         return entity
 
+    async def _resolve_institution(
+        self, user: User, institution_id: UUID
+    ) -> Institution:
+        institution = await self.institution_service.find_by(
+            user=user, filters={"id": institution_id}, required=False
+        )
+        if institution is None:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "Institution not found")
+        return institution
+
     async def create_profile(
         self, user: User, payload: ReceiptRulesCreateSchema
     ) -> ReceiptRulesSchema:
         user_id, username = user.id, user.username
-        entity = self._build_aggregate(user_id, payload)
-        async with self._operation("create", username, entity.id):
+        async with self._operation("create", username, payload.institution_id):
             async with self.repository.transaction():
-                rules = await self.repository.find_by_code(
-                    user_id=user_id, institution_code=payload.institution_code
+                institution = await self._resolve_institution(
+                    user, payload.institution_id
+                )
+                rules = await self.repository.find_by_institution(
+                    user_id=user_id, institution_id=payload.institution_id
                 )
                 if rules is not None:
                     raise HTTPException(
                         HTTPStatus.CONFLICT, "Institution profile already exists"
                     )
+                entity = self._build_aggregate(
+                    user_id, payload, institution=institution
+                )
                 await self.repository.save_profile(entity)
                 result = ReceiptRulesSchema.model_validate(entity)
             return result
@@ -124,11 +147,23 @@ class ReceiptRulesService(
     def _build_aggregate(
         user_id: UUID | None,
         payload: ReceiptRulesCreateSchema | ReceiptRulesSeedEntrySchema,
+        *,
+        institution: Institution | None = None,
     ) -> ReceiptInterpretationProfile:
+        institution_id = (
+            institution.id
+            if institution is not None
+            else getattr(payload, "institution_id", None)
+        )
         entity = ReceiptInterpretationProfile(
             user_id=user_id,
             name=payload.name,
-            institution_code=payload.institution_code,
+            institution_id=institution_id,
+            institution_code=(
+                normalize_code(institution.name_code.upper())
+                if institution is not None
+                else None
+            ),
             is_active=payload.is_active,
         )
         entity.field_rules = [
@@ -263,15 +298,27 @@ class ReceiptRulesService(
             async with self.repository.transaction():
                 await self.repository.lock_seed()
                 for payload in payloads:
-                    owner_id = user_id if payload.institution_code is not None else None
-                    existing = await self.repository.find_by_code(
-                        institution_code=payload.institution_code, user_id=owner_id
+                    owner_id = (
+                        user_id if payload.institution_name is not None else None
+                    )
+                    institution = (
+                        await self.institution_service.resolve_in_transaction(
+                            user, payload.institution_name
+                        )
+                        if payload.institution_name is not None
+                        else None
+                    )
+                    existing = await self.repository.find_by_institution(
+                        institution_id=(
+                            institution.id if institution is not None else None
+                        ),
+                        user_id=owner_id,
                     )
                     if existing is not None:
                         skipped += 1
                         continue
                     await self.repository.save_profile(
-                        self._build_aggregate(owner_id, payload)
+                        self._build_aggregate(owner_id, payload, institution=institution)
                     )
                     created += 1
                 result = ReceiptRulesSeedSchema(created=created, skipped=skipped)

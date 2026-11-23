@@ -13,7 +13,12 @@ from app.domain.institution.schema import (
     InstitutionUpdateSchema,
 )
 from app.domain.institution.service import InstitutionService
-from app.models import Institution, Payment, utcnow
+from app.models import (
+    Institution,
+    Payment,
+    ReceiptInterpretationProfile,
+    utcnow,
+)
 from tests.conftest import FakeRedis
 
 
@@ -41,7 +46,12 @@ async def institution_session():
     async with engine.begin() as connection:
         await connection.run_sync(
             lambda sync: table_registry.metadata.create_all(
-                sync, tables=[Institution.__table__, Payment.__table__]
+                sync,
+                tables=[
+                    Institution.__table__,
+                    Payment.__table__,
+                    ReceiptInterpretationProfile.__table__,
+                ],
             )
         )
     async with AsyncSession(engine, expire_on_commit=False) as session:

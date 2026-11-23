@@ -7,6 +7,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
+from app.domain.institution.schema import InstitutionCreateSchema
+from app.domain.institution.service import InstitutionService
 from app.domain.receipt.rules.business import build_reconciliation_plan
 from app.domain.receipt.rules.field.schema import ReceiptFieldRuleReconcileSchema
 from app.domain.receipt.rules.identification.schema import (
@@ -252,7 +254,7 @@ async def test_list_combines_filters_with_visibility_and_orders_roots(
 ):
     rules_session.scalars.return_value.all.return_value = [profile]
     filters = ReceiptRulesFilter(
-        name="Banco", institution_code="BANK", scope=scope, limit=1
+        name="Banco", institution_id=profile.institution_id, scope=scope, limit=1
     )
     result = await ReceiptRulesRepository(rules_session).list_all(
         page_filter=filters, user_id=profile.user_id
@@ -264,7 +266,7 @@ async def test_list_combines_filters_with_visibility_and_orders_roots(
     assert "(receipt_interpretation_profiles.user_id =" in statement
     assert "OR receipt_interpretation_profiles.user_id IS NULL)" in statement
     assert "Banco" in compiled.params.values()
-    assert "BANK" in compiled.params.values()
+    assert profile.institution_id in compiled.params.values()
     assert (
         "ORDER BY receipt_interpretation_profiles.created_at ASC, receipt_interpretation_profiles.id ASC"
         in statement
@@ -292,7 +294,7 @@ async def test_pagination_counts_roots_separately(
             **filters,
             scope=scope,
             name="Banco",
-            institution_code="BANK",
+            institution_id=profile.institution_id,
             is_active=False,
         ),
         user_id=profile.user_id,
@@ -325,12 +327,13 @@ async def test_identity_queries_distinguish_shared_private_and_excluded_id(
     rules_session, user
 ):
     repo = ReceiptRulesRepository(rules_session)
-    await repo.find_by_code(user_id=None, institution_code=None)
+    await repo.find_by_institution(user_id=None, institution_id=None)
     statement = sql(rules_session.scalar.await_args.args[0])
-    assert "user_id IS NULL" in statement and "institution_code IS NULL" in statement
-    await repo.find_by_code(user_id=user.id, institution_code="BANK")
+    assert "user_id IS NULL" in statement and "institution_id IS NULL" in statement
+    bank = uuid4()
+    await repo.find_by_institution(user_id=user.id, institution_id=bank)
     params = rules_session.scalar.await_args.args[0].compile().params
-    assert user.id in params.values() and "BANK" in params.values()
+    assert user.id in params.values() and bank in params.values()
     excluded = uuid4()
     await repo.find_by_name(name="Bank", user_id=user.id, exclude_id=excluded)
     query = rules_session.scalar.await_args.args[0]
@@ -545,25 +548,31 @@ async def test_profile_contracts_preserve_seed_ownership_reconciliation_and_soft
     assert (await service.seed_defaults(other)).created == 3
     assert (await service.seed_defaults(owner)).created == 0
 
+    custom = await InstitutionService.from_session(session).create(
+        owner, InstitutionCreateSchema(name="Banco Custom")
+    )
     created = await service.create_profile(
         owner,
         ReceiptRulesCreateSchema(
             name="Custom",
-            institution_code="CUSTOM",
+            institution_id=custom.id,
             field_rules=[
                 {"field_name": "payer", "configuration": {"strategy": "not_found"}}
             ],
         ),
     )
+    assert created.institution_code == "BANCO_CUSTOM"
     base: BaseRepository[ReceiptInterpretationProfile] = repo
     page = await base.list_all(
         user_id=owner.id, page_filter=FilterPage(offset=0, limit=2)
     )
     assert page.meta.total == 5 and len(page.items) == 2
     assert all(item.user_id in (None, owner.id) for item in page.items)
-    foreign = await repo.find_by_code(user_id=other.id, institution_code="NUBANK")
-    assert foreign is not None
-    assert await base.find_by(user_id=owner.id, filters={"id": foreign.id}) is None
+    # A instituição é do dono; o outro usuário não tem perfil para ela.
+    foreign = await repo.find_by_institution(
+        user_id=other.id, institution_id=custom.id
+    )
+    assert foreign is None
 
     await service.update_profile(
         created.id,
@@ -597,7 +606,7 @@ async def test_profile_contracts_preserve_seed_ownership_reconciliation_and_soft
         rule.deleted_at == archived.deleted_at and not rule.is_active
         for rule in archived.field_rules
     )
-    shared = await repo.find_by_code(user_id=None, institution_code=None)
+    shared = await repo.find_by_institution(user_id=None, institution_id=None)
     assert shared is not None
     with pytest.raises(HTTPException) as caught:
         await service.delete_profile(shared.id, owner)

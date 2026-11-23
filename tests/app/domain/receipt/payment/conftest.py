@@ -2,6 +2,8 @@ from datetime import date
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from types import SimpleNamespace
+
+from app.shared.utils.string import to_snake_case
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -56,7 +58,12 @@ def payment_service(payment_repository):
 @pytest.fixture
 def payment_output(payment):
     def named_entity(identifier, name):
-        return SimpleNamespace(id=identifier, name=name, created_at=utcnow())
+        return SimpleNamespace(
+            id=identifier,
+            name=name,
+            name_code=to_snake_case(name),
+            created_at=utcnow(),
+        )
 
     return SimpleNamespace(
         id=payment.id,

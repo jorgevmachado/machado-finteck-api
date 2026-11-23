@@ -18,20 +18,34 @@ from app.domain.receipt.rules.field.schema import ReceiptFieldRuleSchema
 from app.domain.receipt.rules.schema import ReceiptRulesSchema
 from app.domain.receipt.rules.service import ReceiptRulesService
 from app.models import ReceiptFieldRule
+from app.shared.utils.string import to_snake_case
 
 MODULE = "app.domain.receipt.interpretation.interpreter.interpreter"
 
 
 @pytest.fixture
 def profiles():
-    return [
-        ReceiptRulesSchema.model_validate(
-            ReceiptRulesService._build_aggregate(
-                None if payload.institution_code is None else uuid4(), payload
+    result = []
+    for payload in load_default_receipt_rules():
+        institution = (
+            None
+            if payload.institution_name is None
+            else SimpleNamespace(
+                id=uuid4(),
+                name=payload.institution_name,
+                name_code=to_snake_case(payload.institution_name),
             )
         )
-        for payload in load_default_receipt_rules()
-    ]
+        result.append(
+            ReceiptRulesSchema.model_validate(
+                ReceiptRulesService._build_aggregate(
+                    None if institution is None else uuid4(),
+                    payload,
+                    institution=institution,
+                )
+            )
+        )
+    return result
 
 
 def rule(field_name, configuration):
@@ -70,7 +84,7 @@ def test_extracts_receipt_attributes_and_applies_configured_fallbacks(profiles):
         "ID da transa\u00e7\u00e3o: TX-123\n"
         "Institui\u00e7\u00e3o Emissora: 001 - Banco Destino\n"
     )
-    data = Interpreter(profiles, "ITAU").interpret(text)
+    data = Interpreter(profiles, "ITAU_UNIBANCO").interpret(text)
     expected = {
         "fine": Decimal("1.20"),
         "payer": "Maria",

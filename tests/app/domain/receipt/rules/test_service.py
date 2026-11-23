@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 from uuid import uuid4
 
 import pytest
@@ -10,6 +10,10 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.pagination import CustomLimitOffsetPage
+from app.domain.receipt.rules.field.schema import ReceiptFieldRuleCreateSchema
+from app.domain.receipt.rules.identification.schema import (
+    ReceiptIdentificationRuleCreateSchema,
+)
 from app.domain.receipt.rules.schema import (
     ReceiptRulesCreateSchema,
     ReceiptRulesFilter,
@@ -20,6 +24,30 @@ from app.models import ReceiptFieldRule, ReceiptIdentificationRule, utcnow
 
 pytestmark = pytest.mark.asyncio
 MODULE = "app.domain.receipt.rules.service"
+
+BANK = SimpleNamespace(id=uuid4(), name="Bank", name_code="banco_do_brasil")
+
+
+@pytest.fixture
+def service(rules_repository):
+    instance = ReceiptRulesService(rules_repository)
+    stub = SimpleNamespace(
+        find_by=AsyncMock(return_value=BANK),
+        resolve=AsyncMock(return_value=BANK),
+        resolve_in_transaction=AsyncMock(return_value=BANK),
+    )
+    with patch.object(
+        ReceiptRulesService,
+        "institution_service",
+        new_callable=PropertyMock,
+        return_value=stub,
+    ):
+        yield instance
+
+
+@pytest.fixture
+def create_payload():
+    return ReceiptRulesCreateSchema(name="Bank", institution_id=BANK.id)
 
 
 async def test_list_all_passes_active_filter_and_preserves_live_children(
@@ -59,14 +87,17 @@ async def test_list_all_passes_active_filter_and_preserves_live_children(
 
 
 async def test_create_owns_nested_aggregate_and_logs_only_after_commit(
-    rules_repository, user, rule_payload
+    service, rules_repository, user, rule_payload, create_payload
 ):
-    service = ReceiptRulesService(rules_repository)
-    payload = ReceiptRulesCreateSchema(
-        name="Bank",
-        institution_code="BANK",
-        field_rules=[rule_payload],
-        identification_rules=[{"pattern": "BANK", "weight": 2}],
+    payload = create_payload.model_copy(
+        update={
+            "field_rules": [ReceiptFieldRuleCreateSchema.model_validate(rule_payload)],
+            "identification_rules": [
+                ReceiptIdentificationRuleCreateSchema.model_validate(
+                    {"pattern": "BANK", "weight": 2}
+                )
+            ],
+        }
     )
     with patch("app.core.service.base.log_service_success") as success:
         success.side_effect = lambda *args, **kwargs: (
@@ -75,6 +106,8 @@ async def test_create_owns_nested_aggregate_and_logs_only_after_commit(
         result = await service.create_profile(user, payload)
     entity = rules_repository.save_profile.await_args.args[0]
     assert entity.user_id == user.id
+    assert entity.institution_id == BANK.id
+    assert entity.institution_code == "BANCO_DO_BRASIL"
     assert result.id == entity.id and result.scope == "private"
     assert entity.field_rules[0].configuration["parser"] == "text"
     assert entity.identification_rules[0].profile_id == entity.id
@@ -82,33 +115,44 @@ async def test_create_owns_nested_aggregate_and_logs_only_after_commit(
 
 
 async def test_create_duplicate_returns_conflict_without_save(
-    rules_repository, user, profile
+    service, rules_repository, user, profile
 ):
-    rules_repository.find_by_code.return_value = profile
+    rules_repository.find_by_institution.return_value = profile
     with pytest.raises(HTTPException) as caught:
-        await ReceiptRulesService(rules_repository).create_profile(
-            user, ReceiptRulesCreateSchema(name="Other name", institution_code="BANK")
+        await service.create_profile(
+            user, ReceiptRulesCreateSchema(name="Other name", institution_id=BANK.id)
         )
     assert caught.value.status_code == 409
     rules_repository.save_profile.assert_not_awaited()
     assert rules_repository.rolled_back
 
 
-async def test_entity_builder_validates_and_normalizes_nested_payload(
-    rules_repository, user, rule_payload
+async def test_create_rejects_an_institution_from_another_user(
+    service, rules_repository, user
 ):
-    service = ReceiptRulesService(rules_repository)
+    service.institution_service.find_by.return_value = None
+    with pytest.raises(HTTPException) as caught:
+        await service.create_profile(
+            user, ReceiptRulesCreateSchema(name="Bank", institution_id=uuid4())
+        )
+    assert caught.value.status_code == 404
+    rules_repository.save_profile.assert_not_awaited()
+
+
+async def test_entity_builder_validates_and_normalizes_nested_payload(
+    service, rules_repository, user, rule_payload
+):
     entity = service._build_entity(
         user.id,
         {
             "name": "  Bank  ",
-            "institution_code": " bank ",
+            "institution_id": str(BANK.id),
             "field_rules": [rule_payload],
             "identification_rules": [{"pattern": "BANK", "weight": 2}],
         },
     )
     assert entity.name == "Bank"
-    assert entity.institution_code == "BANK"
+    assert entity.institution_id == BANK.id
     assert entity.user_id == user.id
     assert entity.field_rules[0].profile_id == entity.id
     assert entity.field_rules[0].configuration["parser"] == "text"
@@ -116,7 +160,7 @@ async def test_entity_builder_validates_and_normalizes_nested_payload(
     assert entity.identification_rules[0].pattern == "BANK"
     with pytest.raises(ValidationError):
         service._build_entity(
-            user.id, {"name": "Bank", "institution_code": "BANK", "is_active": "yes"}
+            user.id, {"name": "Bank", "institution_id": str(BANK.id), "is_active": "yes"}
         )
     rules_repository.save_profile.assert_not_awaited()
 
@@ -163,6 +207,7 @@ async def test_missing_or_foreign_profiles_return_404(
 @pytest.mark.parametrize("operation", ["update", "delete"])
 async def test_general_is_read_only(rules_repository, user, profile, operation):
     profile.user_id = None
+    profile.institution_id = None
     profile.institution_code = None
     rules_repository.find_by.return_value = profile
     service = ReceiptRulesService(rules_repository)
@@ -258,18 +303,17 @@ async def test_delete_locks_then_delegates(rules_repository, user, profile):
     "operation", ["create", "find_by", "list_all", "update", "delete", "seed_defaults"]
 )
 async def test_infrastructure_errors_are_not_success_or_empty(
-    rules_repository, user, operation
+    service, rules_repository, user, operation
 ):
     failure = OperationalError("query", {}, RuntimeError("database unavailable"))
     rules_repository.find_by.side_effect = failure
-    rules_repository.find_by_code.side_effect = failure
+    rules_repository.find_by_institution.side_effect = failure
     rules_repository.list_all.side_effect = failure
-    service = ReceiptRulesService(rules_repository)
     with patch("app.core.service.base.log_service_success") as success:
         with pytest.raises(HTTPException) as caught:
             if operation == "create":
                 await service.create_profile(
-                    user, ReceiptRulesCreateSchema(name="Bank", institution_code="BANK")
+                    user, ReceiptRulesCreateSchema(name="Bank", institution_id=BANK.id)
                 )
             elif operation == "update":
                 await service.update_profile(uuid4(), ReceiptRulesUpdateSchema(), user)
@@ -286,7 +330,9 @@ async def test_infrastructure_errors_are_not_success_or_empty(
     success.assert_not_called()
 
 
-async def test_commit_failure_does_not_read_expired_user_metadata(rules_repository):
+async def test_commit_failure_does_not_read_expired_user_metadata(
+    service, rules_repository
+):
     expired = False
     owner_id = uuid4()
 
@@ -311,9 +357,9 @@ async def test_commit_failure_does_not_read_expired_user_metadata(rules_reposito
     rules_repository.transaction = fail_commit
     with patch("app.core.service.base.log_service_success") as success:
         with pytest.raises(HTTPException) as caught:
-            await ReceiptRulesService(rules_repository).create_profile(
+            await service.create_profile(
                 ExpiringUser(),
-                ReceiptRulesCreateSchema(name="Bank", institution_code="BANK"),
+                ReceiptRulesCreateSchema(name="Bank", institution_id=BANK.id),
             )
     assert caught.value.status_code == 500
     assert isinstance(caught.value.__cause__, RuntimeError)
@@ -335,7 +381,7 @@ async def test_integrity_translation_only_recognizes_known_constraint(rules_repo
 
 
 async def test_inherited_operation_translates_profile_integrity_error(
-    rules_repository, user
+    service, rules_repository, user
 ):
     diagnostic = RuntimeError("duplicate")
     diagnostic.diag = SimpleNamespace(
@@ -344,8 +390,8 @@ async def test_inherited_operation_translates_profile_integrity_error(
     rules_repository.save_profile.side_effect = IntegrityError("insert", {}, diagnostic)
     with patch("app.core.service.base.log_service_success") as success:
         with pytest.raises(HTTPException) as caught:
-            await ReceiptRulesService(rules_repository).create_profile(
-                user, ReceiptRulesCreateSchema(name="Bank", institution_code="BANK")
+            await service.create_profile(
+                user, ReceiptRulesCreateSchema(name="Bank", institution_id=BANK.id)
             )
     assert caught.value.status_code == 409
     assert caught.value.detail == "Institution profile already exists"

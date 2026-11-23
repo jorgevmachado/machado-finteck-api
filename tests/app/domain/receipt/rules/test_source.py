@@ -18,9 +18,17 @@ from app.domain.receipt.rules.service import ReceiptRulesService
 from app.models import ReceiptFieldRule, ReceiptInterpretationProfile
 
 
+SEED_NAMES = {
+    "NUBANK": "Nu Pagamentos",
+    "ITAU": "Itaú Unibanco",
+    "CAIXA": "Caixa Econômica Federal",
+}
+
+
 def source_rule(code):
+    name = SEED_NAMES[code]
     profile = next(
-        p for p in load_default_receipt_rules() if p.institution_code == code
+        p for p in load_default_receipt_rules() if p.institution_name == name
     )
     return next(r for r in profile.field_rules if r.field_name == "source_institution")
 

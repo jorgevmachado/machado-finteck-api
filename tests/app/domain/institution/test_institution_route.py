@@ -136,7 +136,14 @@ async def test_http_crud_with_real_institution_service_and_database(
         body = created.json()
         identifier = body["id"]
         assert body["name"] == "Electric Company"
-        assert set(body) == {"id", "name", "created_at", "updated_at", "deleted_at"}
+        assert set(body) == {
+            "id",
+            "name",
+            "name_code",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+        }
         assert (await client.get(f"/institutions/{identifier}")).json() == body
         page = await client.get(
             "/institutions",

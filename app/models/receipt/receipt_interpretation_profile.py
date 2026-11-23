@@ -29,8 +29,8 @@ class ReceiptInterpretationProfile:
     __tablename__ = "receipt_interpretation_profiles"
     __table_args__ = (
         CheckConstraint(
-            "(user_id IS NULL AND institution_code IS NULL) OR "
-            "(user_id IS NOT NULL AND institution_code IS NOT NULL)",
+            "(user_id IS NULL AND institution_id IS NULL) OR "
+            "(user_id IS NOT NULL AND institution_id IS NOT NULL)",
             name="ck_receipt_profiles_scope",
         ),
         CheckConstraint(
@@ -51,7 +51,7 @@ class ReceiptInterpretationProfile:
         Index(
             "uq_receipt_profiles_owner_institution_live",
             "user_id",
-            "institution_code",
+            "institution_id",
             unique=True,
             postgresql_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
             sqlite_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
@@ -62,7 +62,13 @@ class ReceiptInterpretationProfile:
 
     name: Mapped[str] = mapped_column(String, nullable=False)
 
+    # Snapshot derivado de Institution.name_code, gravado na escrita para que o
+    # interpretador compare um vocabulário estável (ver _identify/merge_rules).
     institution_code: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    institution_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("institutions.id"), nullable=True, default=None
+    )
 
     field_rules: Mapped[list["ReceiptFieldRule"]] = relationship(
         back_populates="profile",
