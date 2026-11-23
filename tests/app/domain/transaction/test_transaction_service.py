@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
@@ -27,6 +28,52 @@ async def test_create_builds_owned_entity_and_invalidates_after_save(
     transaction_service._invalidate_cache.assert_awaited_once_with(
         user, result, "create"
     )
+
+
+async def test_build_entity_requires_settled_on_for_settled_transaction(
+    transaction_service, transaction_payload, user
+):
+    data = {
+        **transaction_payload.model_dump(),
+        "status": TransactionStatusEnum.SETTLED,
+    }
+
+    with pytest.raises(
+        ValueError, match="settled_on is required when status is SETTLED"
+    ):
+        transaction_service._build_entity(user.id, data)
+
+
+async def test_build_entity_preserves_settled_on_for_settled_transaction(
+    transaction_service, transaction_payload, user
+):
+    settled_on = date(2026, 11, 9)
+    data = {
+        **transaction_payload.model_dump(),
+        "status": TransactionStatusEnum.SETTLED,
+        "settled_on": settled_on,
+    }
+
+    result = transaction_service._build_entity(user.id, data)
+
+    assert result.user_id == user.id
+    assert result.status == TransactionStatusEnum.SETTLED
+    assert result.settled_on == settled_on
+
+
+async def test_build_entity_clears_settled_on_for_non_settled_transaction(
+    transaction_service, transaction_payload, user
+):
+    data = {
+        **transaction_payload.model_dump(),
+        "status": TransactionStatusEnum.PENDING,
+        "settled_on": date(2026, 11, 9),
+    }
+
+    result = transaction_service._build_entity(user.id, data)
+
+    assert result.status == TransactionStatusEnum.PENDING
+    assert result.settled_on is None
 
 
 async def test_partial_update_changes_only_requested_fields(

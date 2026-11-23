@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING
 
 from uuid import UUID, uuid4
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, Enum as SAEnum, Boolean, Integer
+from sqlalchemy import DateTime, ForeignKey, String, Text, Enum as SAEnum, Boolean, Integer, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database.base import table_registry, default_lazy
@@ -14,7 +15,7 @@ from app.models import utcnow
 from app.models.credit_card.enums import CreditCardBrandEnum
 
 if TYPE_CHECKING:
-    from app.models import Transaction
+    from app.models import ScheduledTransaction, Transaction, TransactionSeries
 
 @table_registry.mapped_as_dataclass
 class CreditCard:
@@ -48,8 +49,8 @@ class CreditCard:
         Integer,
         nullable=False,
     )
-    limit: Mapped[int | None] = mapped_column(
-        Integer,
+    limit: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
         nullable=True,
     )
     color: Mapped[str | None] = mapped_column(
@@ -81,6 +82,22 @@ class CreditCard:
     )
 
     transactions: Mapped[list["Transaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="credit_card",
+    )
+
+    transaction_series: Mapped[list["TransactionSeries"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="credit_card",
+    )
+
+    scheduled_transactions: Mapped[list["ScheduledTransaction"]] = relationship(
         lazy=default_lazy,
         default_factory=list,
         init=False,

@@ -18,7 +18,11 @@ from app.models.receipt import (
 from app.models.transaction import (
     TransactionDirectionEnum,
     TransactionStatusEnum,
-    Transaction
+    TransactionKindEnum,
+    TransactionFrequencyUnitEnum,
+    Transaction,
+    TransactionSeries,
+    ScheduledTransaction
 )
 
 __all__ = [
@@ -45,5 +49,9 @@ __all__ = [
     "TransactionDirectionEnum",
     "TransactionStatusEnum",
     "Transaction",
+    "TransactionKindEnum",
+    "TransactionFrequencyUnitEnum",
+    "TransactionSeries",
+    "ScheduledTransaction",
     "utcnow",
 ]

@@ -79,6 +79,18 @@ class TestCategoryService:
             assert getattr(CategoryService, method) is getattr(BaseService, method)
 
 
+@pytest.mark.asyncio
+async def test_count_subcategories_delegates_owner_and_handles_errors(repository, user):
+    repository.count_subcategories.return_value = 7
+    service = CategoryService(repository)
+    assert await service.count_subcategories(user) == 7
+    repository.count_subcategories.assert_awaited_once_with(user_id=user.id)
+    repository.count_subcategories.side_effect = RuntimeError("database failure")
+    with pytest.raises(HTTPException) as error:
+        await service.count_subcategories(user)
+    assert error.value.status_code == 500
+
+
 class TestCategoryServiceList:
     @staticmethod
     @pytest.mark.asyncio

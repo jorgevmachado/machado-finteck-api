@@ -2,7 +2,7 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, UploadFile, File, Query
+from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -31,9 +31,9 @@ def receipt_service(session: Session) -> ReceiptService:
 
 
 def receipt_filter(
-    page: Annotated[int | None, Query(ge=1)] = None,
-    limit: Annotated[int, Query(ge=1)] = 12,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    page: int | None = None,
+    limit: int | None = 12,
+    offset: int | None = None,
 ) -> FilterPage:
     return FilterPage.build(page=page, limit=limit, offset=offset)
 
@@ -81,3 +81,12 @@ async def find_one(receipt_id: UUID, service: Service, current_user: CurrentUser
 @router.post("/{receipt_id}/confirm", response_model=Message, status_code=HTTPStatus.OK)
 async def confirm_receipt(receipt_id: UUID, service: Service, current_user: CurrentUser, payload: ReceiptConfirmSchema):
     return await service.confirm(receipt_id=receipt_id, user=current_user, payload=payload)
+
+@router.put("/{receipt_id}", response_model=ReceiptSchema, status_code=HTTPStatus.OK)
+async def update_receipt(
+    receipt_id: UUID,
+    service: Service,
+    current_user: CurrentUser,
+    payload: ReceiptConfirmSchema,
+):
+    return await service.update_receipt(receipt_id=receipt_id, user=current_user, payload=payload)

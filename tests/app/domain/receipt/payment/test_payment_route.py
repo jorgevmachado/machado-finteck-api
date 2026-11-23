@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -92,6 +93,61 @@ def test_list_all_serializes_results_and_delegates_filters(
     assert kwargs["page_filter"].page == page
     assert kwargs["page_filter"].limit == limit
     assert kwargs["page_filter"].offset == offset
+
+
+def test_list_all_forwards_period_and_name_filters_to_the_repository(
+    payment_client, route_service, payment_output
+):
+    route_service.list_all.return_value = [payment_output]
+
+    response = payment_client.get(
+        "/receipts/payments",
+        params={
+            "start_date": "2026-10-01",
+            "end_date": "2026-10-31",
+            "payer": "Maria",
+            "subcategory": "Energia",
+            "source_institution": "Nubank",
+        },
+    )
+
+    assert response.status_code == 200
+    page_filter = route_service.list_all.await_args.kwargs["page_filter"]
+    assert page_filter.start_date == date(2026, 10, 1)
+    assert page_filter.end_date == date(2026, 10, 31)
+    assert page_filter.payer == "Maria"
+    assert page_filter.subcategory == "Energia"
+    assert page_filter.source_institution == "Nubank"
+
+
+def test_list_all_forwards_ordering_to_the_repository(
+    payment_client, route_service, payment_output
+):
+    route_service.list_all.return_value = [payment_output]
+
+    response = payment_client.get(
+        "/receipts/payments",
+        params={"order_by": "payment_date", "order": "desc"},
+    )
+
+    assert response.status_code == 200
+    page_filter = route_service.list_all.await_args.kwargs["page_filter"]
+    assert page_filter.order_by == "payment_date"
+    assert page_filter.order == "desc"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"order_by": "name"},
+        {"order": "sideways"},
+        {"start_date": "31/10/2026"},
+    ],
+)
+def test_list_all_rejects_unsupported_filters(payment_client, params):
+    response = payment_client.get("/receipts/payments", params=params)
+
+    assert response.status_code == 422
 
 
 def test_find_one_returns_nested_payment(

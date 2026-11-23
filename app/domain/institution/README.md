@@ -17,13 +17,11 @@ autenticado.
 
 Usuários diferentes podem cadastrar instituições com o mesmo nome.
 
-> [!WARNING]
-> Na prática, `Institution.name_code` tem `unique=True` **global** no modelo
-> (`app/models/institution/institution.py`), além da constraint composta por
-> usuário. Isso impede que dois usuários cadastrem a mesma instituição com o
-> mesmo nome normalizado (resulta em `500` por `IntegrityError`). A regra
-> documentada acima — unicidade por usuário — está pendente de correção via
-> migration que remova a restrição global.
+Aplique `make migrate` antes de usar o seed em uma base existente. A migration
+`2e7f31ff6244` remove a unicidade global de `name_code`, preservando a constraint
+`uq_institutions_user_id_name_code`. O downgrade exige que nao existam codigos
+repetidos entre usuarios; caso existam, o banco rejeita a restauracao da
+restricao global sem apagar dados.
 
 ## Estrutura
 
@@ -40,6 +38,7 @@ Usuários diferentes podem cadastrar instituições com o mesmo nome.
 | Método | Rota | Ação |
 |---|---|---|
 | `POST` | `/institutions` | Cadastra uma instituição |
+| `POST` | `/institutions/seed` | Cria instituicoes padrao ausentes (`200`) |
 | `GET` | `/institutions` | Lista instituições; aceita filtros e paginação |
 | `GET` | `/institutions/{institution_id}` | Consulta uma instituição |
 | `PUT` | `/institutions/{institution_id}` | Atualiza o nome de uma instituição |
@@ -60,6 +59,25 @@ Usuários diferentes podem cadastrar instituições com o mesmo nome.
 O nome é armazenado sem espaços excedentes e gera internamente o código
 `banco_exemplo`, usado para verificar duplicidades entre as instituições do
 mesmo usuário.
+
+## Seed
+
+`POST /institutions/seed` segue o padrao de category: exige apenas autenticacao
+JWT (nao exige admin) e nao recebe corpo. O catalogo `institutions.json` contem
+instituicoes financeiras presentes no catalogo de contas, sem a entrada
+"Dinheiro em especie", e e validado por `seeds.py`.
+
+Retorna `{"created": 13, "skipped": 0}` para um usuario sem instituicoes.
+O servico compara o `name_code` normalizado somente dentro dos registros do
+usuario autenticado e ignora os existentes, preservando seus dados.
+Repetir a chamada nao duplica registros; usuarios diferentes recebem suas
+proprias instituicoes. A gravacao e atomica e o cache do usuario e invalidado
+apos o commit quando houver criacoes.
+
+```bash
+curl -X POST http://localhost:8000/institutions/seed \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ## Testes
 

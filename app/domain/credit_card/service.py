@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from http import HTTPStatus
 from uuid import UUID
 
@@ -12,7 +13,9 @@ from app.domain.credit_card.schema import (
     CreditCardSchema,
     CreditCardCreateSchema,
     CreditCardUpdateSchema,
+    CreditCardSeedSchema,
 )
+from app.domain.credit_card.seeds import load_seeds_credit_cards
 from app.models import CreditCard, CreditCardBrandEnum, User
 from app.core.service import BaseService
 
@@ -55,6 +58,8 @@ class CreditCardService(
         description = data.get("description")
         last_four_digits = data.get("last_four_digits")
         limit = data.get("limit")
+        if isinstance(limit, int) and not isinstance(limit, bool):
+            limit = Decimal(limit)
         return CreditCard(
             user_id=user_id,
             name=name,
@@ -68,7 +73,7 @@ class CreditCardService(
             ),
             closing_day=closing_day,
             due_day=due_day,
-            limit=limit if isinstance(limit, int) else None,
+            limit=limit if isinstance(limit, Decimal) else None,
         )
 
     async def _normalize(
@@ -87,3 +92,23 @@ class CreditCardService(
                     detail="CreditCard already exists",
                 )
         return data
+
+    async def seed_defaults(self, user: User) -> CreditCardSeedSchema:
+        async with self._operation("seed_defaults", user.username):
+            payloads = load_seeds_credit_cards()
+            created: list[CreditCard] = []
+            skipped = 0
+            async with self.repository.transaction():
+                for payload in payloads:
+                    existing = await self.repository.find_by_name(
+                        name=payload.name, user_id=user.id
+                    )
+                    if existing is not None:
+                        skipped += 1
+                        continue
+                    entity = self._build_entity(user.id, payload.model_dump())
+                    await self.repository.save(entity, user_id=user.id)
+                    created.append(entity)
+            if created:
+                await self._invalidate_cache(user, created[0], "seed_defaults")
+            return CreditCardSeedSchema(created=len(created), skipped=skipped)

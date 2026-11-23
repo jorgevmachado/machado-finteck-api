@@ -12,6 +12,7 @@ from app.domain.institution.schema import (
     InstitutionCreateSchema,
     InstitutionSchema,
     InstitutionUpdateSchema,
+    InstitutionSeedSchema,
 )
 from app.domain.institution.service import InstitutionService
 from app.models import User
@@ -66,6 +67,11 @@ async def list_all(
     page_filter: Annotated[FilterPage, Depends(institution_filter)],
 ):
     return await service.list_all(page_filter=page_filter, user=current_user)
+
+
+@router.post("/seed", response_model=InstitutionSeedSchema, status_code=HTTPStatus.OK)
+async def seed(service: Service, current_user: CurrentUser) -> InstitutionSeedSchema:
+    return await service.seed_defaults(user=current_user)
 
 
 @router.get(

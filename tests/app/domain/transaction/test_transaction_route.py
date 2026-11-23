@@ -1,3 +1,5 @@
+from datetime import date
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -16,7 +18,10 @@ from app.domain.transaction.route import (
     transaction_service,
     update,
 )
-from app.domain.transaction.schema import TransactionUpdateSchema
+from app.domain.transaction.schema import (
+    TransactionUpdateSchema,
+    TransactionSeedRequestSchema,
+)
 from app.domain.transaction.service import TransactionService
 from app.models import TransactionDirectionEnum, TransactionStatusEnum
 from app.shared.schemas import Message
@@ -157,3 +162,63 @@ def test_http_requires_authentication(method, transaction_data):
     assert response.status_code in (401, 403)
     for operation in ("create", "list_all", "find_by", "update", "delete"):
         getattr(service, operation).assert_not_awaited()
+
+
+def test_seed_http_delegates_validated_request(transaction_client, route_service, user):
+    user.role = SimpleNamespace(name_code="admin", deleted_at=None)
+    route_service.seed.return_value = {
+        "seed": 42,
+        "start_date": "2026-06-01",
+        "end_date": "2026-11-30",
+        "transactions": 100,
+        "transaction_series": 10,
+        "scheduled_transactions": 50,
+    }
+    response = transaction_client.post("/transactions/seed", json={"seed": 42})
+    assert response.status_code == 201
+    assert response.json()["scheduled_transactions"] == 50
+    route_service.seed.assert_awaited_once_with(
+        user=user, payload=TransactionSeedRequestSchema(seed=42)
+    )
+
+
+@pytest.mark.parametrize("role", [None, "user", "ADMIN", "deleted-admin"])
+def test_seed_http_denies_non_admin_before_database_access(
+    transaction_client,
+    route_service,
+    transaction_service,
+    transaction_repository,
+    user,
+    role,
+):
+    user.role = (
+        SimpleNamespace(
+            name_code="admin" if role == "deleted-admin" else role,
+            deleted_at=date(2026, 1, 1) if role == "deleted-admin" else None,
+        )
+        if role
+        else None
+    )
+    route_service.seed.side_effect = transaction_service.seed
+    response = transaction_client.post("/transactions/seed", json={})
+    assert response.status_code == 403
+    transaction_repository.transaction.assert_not_called()
+
+
+def test_seed_http_requires_authentication():
+    app = FastAPI()
+    app.include_router(router, prefix="/transactions")
+    service = AsyncMock()
+    app.dependency_overrides[transaction_service] = lambda: service
+    with TestClient(app) as client:
+        response = client.post("/transactions/seed", json={})
+    assert response.status_code == 401
+    service.seed.assert_not_awaited()
+
+
+def test_seed_http_rejects_invalid_input(transaction_client, route_service):
+    response = transaction_client.post(
+        "/transactions/seed", json={"transactions": 1001}
+    )
+    assert response.status_code == 422
+    route_service.seed.assert_not_awaited()

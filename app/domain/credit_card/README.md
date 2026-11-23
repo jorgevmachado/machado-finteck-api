@@ -33,6 +33,7 @@ processamento de pagamentos, geração de faturas ou cálculo de limite disponí
 | Método | Rota | Ação |
 |---|---|---|
 | `POST` | `/credit-cards` | Cria um cartão e retorna seus dados (`201`) |
+| `POST` | `/credit-cards/seed` | Cria cartoes padrao ausentes (`200`) |
 | `GET` | `/credit-cards` | Lista cartões, com suporte a paginação |
 | `GET` | `/credit-cards/{credit_card_id}` | Busca um cartão por identificador |
 | `PUT` | `/credit-cards/{credit_card_id}` | Atualiza os campos enviados e retorna `Message` |
@@ -76,6 +77,26 @@ Payload de criação:
   "last_four_digits": "1234",
   "is_active": true
 }
+```
+
+## Seed
+
+`POST /credit-cards/seed` segue o padrao de category, account e institution:
+exige apenas autenticacao JWT (nao exige admin), nao recebe corpo e usa
+`credit_cards.json`, validado por `seeds.py`.
+
+Os cartoes pertencem ao usuario autenticado. Nomes ja cadastrados para esse
+usuario sao ignorados, sem alterar os dados existentes. Repetir a chamada
+nao duplica os registros; outros usuarios recebem seus proprios cartoes.
+A gravacao ocorre em uma unica transacao e o cache do usuario e invalidado
+apos o commit quando houver criacoes.
+
+Em uma conta sem cartoes, retorna `{"created": 12, "skipped": 0}`.
+Na repeticao, retorna `{"created": 0, "skipped": 12}`.
+
+```bash
+curl -X POST http://localhost:8000/credit-cards/seed \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Testes

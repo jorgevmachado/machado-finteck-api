@@ -1,0 +1,21 @@
+[
+  {"name": "Conta de energia", "direction": "OUT", "valueRange": {"min": 120, "max": 480}, "weight": 5, "unit": "MONTH", "categoryHint": "Energia Elétrica"},
+  {"name": "Água", "direction": "OUT", "valueRange": {"min": 60, "max": 220}, "weight": 4, "unit": "MONTH", "categoryHint": "Água e Esgoto"},
+  {"name": "Internet", "direction": "OUT", "valueRange": {"min": 99, "max": 250}, "weight": 4, "unit": "MONTH", "categoryHint": "Internet e TV"},
+  {"name": "Condomínio", "direction": "OUT", "valueRange": {"min": 350, "max": 1200}, "weight": 3, "unit": "MONTH", "categoryHint": "Condomínio"},
+  {"name": "Aluguel", "direction": "OUT", "valueRange": {"min": 1200, "max": 3800}, "weight": 3, "unit": "MONTH", "categoryHint": "Aluguel ou Financiamento"},
+  {"name": "Escola das crianças", "direction": "OUT", "valueRange": {"min": 900, "max": 2800}, "weight": 2, "unit": "MONTH", "categoryHint": "Mensalidade Escolar"},
+  {"name": "Escola do João", "direction": "OUT", "valueRange": {"min": 700, "max": 2200}, "weight": 1, "unit": "MONTH", "categoryHint": "Mensalidade Escolar"},
+  {"name": "Balé da Fernanda", "direction": "OUT", "valueRange": {"min": 150, "max": 380}, "weight": 2, "unit": "MONTH", "categoryHint": "Cursos e Idiomas"},
+  {"name": "Inglês das crianças", "direction": "OUT", "valueRange": {"min": 250, "max": 600}, "weight": 1, "unit": "MONTH", "categoryHint": "Cursos e Idiomas"},
+  {"name": "Academia", "direction": "OUT", "valueRange": {"min": 90, "max": 250}, "weight": 3, "unit": "MONTH", "categoryHint": "Academia e Bem-estar"},
+  {"name": "Plano de saúde", "direction": "OUT", "valueRange": {"min": 450, "max": 1600}, "weight": 3, "unit": "MONTH", "categoryHint": "Plano de Saúde"},
+  {"name": "Streaming", "direction": "OUT", "valueRange": {"min": 25, "max": 80}, "weight": 4, "unit": "MONTH", "categoryHint": "Cinema e Streaming"},
+  {"name": "Celular", "direction": "OUT", "valueRange": {"min": 45, "max": 150}, "weight": 3, "unit": "MONTH", "categoryHint": "Telefone Celular"},
+  {"name": "Diarista", "direction": "OUT", "valueRange": {"min": 150, "max": 250}, "weight": 2, "unit": "WEEK", "categoryHint": "Serviços Domésticos"},
+  {"name": "Feira da semana", "direction": "OUT", "valueRange": {"min": 50, "max": 180}, "weight": 2, "unit": "WEEK", "categoryHint": "Feira"},
+  {"name": "Domínio do site", "direction": "OUT", "valueRange": {"min": 40, "max": 120}, "weight": 1, "unit": "YEAR", "categoryHint": "Assinaturas Digitais"},
+  {"name": "Seguro do carro", "direction": "OUT", "valueRange": {"min": 1800, "max": 4800}, "weight": 1, "unit": "YEAR", "categoryHint": "Seguro do Veículo"},
+  {"name": "Salário", "direction": "IN", "valueRange": {"min": 3500, "max": 12000}, "weight": 4, "unit": "MONTH", "categoryHint": null},
+  {"name": "Aluguel recebido", "direction": "IN", "valueRange": {"min": 900, "max": 2800}, "weight": 1, "unit": "MONTH", "categoryHint": null}
+]

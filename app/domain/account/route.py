@@ -13,6 +13,7 @@ from app.domain.account.schema import (
     AccountSchema,
     AccountCreateSchema,
     AccountUpdateSchema,
+    AccountSeedSchema,
 )
 from app.domain.account.service import AccountService
 from app.models import AccountTypeEnum, User
@@ -80,6 +81,11 @@ async def list_all(
         page_filter=page_filter,
         user=current_user,
     )
+
+
+@router.post("/seed", response_model=AccountSeedSchema, status_code=HTTPStatus.OK)
+async def seed(service: Service, current_user: CurrentUser) -> AccountSeedSchema:
+    return await service.seed_defaults(user=current_user)
 
 
 @router.get("/{account_id}", response_model=AccountSchema, status_code=HTTPStatus.OK)

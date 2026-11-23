@@ -1,0 +1,11 @@
+[
+  {"name": "Geladeira", "totalRange": {"min": 2500, "max": 7000}, "installmentsRange": {"min": 6, "max": 12}, "weight": 3, "categoryHint": "Manutenção e Reparos"},
+  {"name": "Sofá", "totalRange": {"min": 1800, "max": 6000}, "installmentsRange": {"min": 4, "max": 12}, "weight": 2, "categoryHint": "Manutenção e Reparos"},
+  {"name": "Notebook", "totalRange": {"min": 3000, "max": 9000}, "installmentsRange": {"min": 6, "max": 12}, "weight": 3, "categoryHint": "Material Didático"},
+  {"name": "Curso de inglês", "totalRange": {"min": 1500, "max": 6000}, "installmentsRange": {"min": 6, "max": 18}, "weight": 2, "categoryHint": "Cursos e Idiomas"},
+  {"name": "IPVA", "totalRange": {"min": 900, "max": 4500}, "installmentsRange": {"min": 2, "max": 5}, "weight": 2, "categoryHint": "IPVA"},
+  {"name": "IPTU", "totalRange": {"min": 800, "max": 5000}, "installmentsRange": {"min": 2, "max": 10}, "weight": 2, "categoryHint": "IPTU"},
+  {"name": "Passagens de férias", "totalRange": {"min": 2000, "max": 9000}, "installmentsRange": {"min": 3, "max": 10}, "weight": 2, "categoryHint": "Viagens"},
+  {"name": "Celular novo", "totalRange": {"min": 1500, "max": 8000}, "installmentsRange": {"min": 6, "max": 24}, "weight": 3, "categoryHint": "Telefone Celular"},
+  {"name": "Tratamento dentário", "totalRange": {"min": 1200, "max": 8000}, "installmentsRange": {"min": 3, "max": 12}, "weight": 1, "categoryHint": "Consultas e Exames"}
+]

@@ -13,6 +13,7 @@ from app.domain.credit_card.schema import (
     CreditCardSchema,
     CreditCardCreateSchema,
     CreditCardUpdateSchema,
+    CreditCardSeedSchema,
 )
 from app.domain.credit_card.service import CreditCardService
 from app.models import CreditCardBrandEnum, User
@@ -74,6 +75,11 @@ async def list_all(
         page_filter=page_filter,
         user=current_user,
     )
+
+
+@router.post("/seed", response_model=CreditCardSeedSchema, status_code=HTTPStatus.OK)
+async def seed(service: Service, current_user: CurrentUser) -> CreditCardSeedSchema:
+    return await service.seed_defaults(user=current_user)
 
 
 @router.get(

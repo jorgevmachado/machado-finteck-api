@@ -2,11 +2,12 @@ from datetime import datetime, date
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.domain.receipt.data.schema import ReceiptData, ReceiptDataError
 from app.domain.receipt.interpretation.schema import InterpretationResult
 from app.models import ReceiptStatusEnum
+from app.shared.utils.string import text_strip
 
 
 class ReceiptSchema(BaseModel):
@@ -65,9 +66,18 @@ class ReceiptConfirmSchema(BaseModel):
     due_date: date | None = None
     discount: Decimal | None = None
     interest: Decimal | None = None
+    category: str | None = None
     description: str | None = None
     total_charges: Decimal | None = None
     authentication: str | None = None
     transaction_id: str | None = None
     effective_payer: str | None = None
     document_amount: Decimal | None = None
+
+    @field_validator("payer", "beneficiary", "source_institution")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        value = text_strip(value)
+        if not value:
+            raise ValueError("Field cannot be empty")
+        return value

@@ -50,3 +50,8 @@ class AccountUpdateSchema(AccountCreateSchema):
         if value is None:
             raise ValueError("Field cannot be null")
         return value
+
+
+class AccountSeedSchema(BaseModel):
+    created: int
+    skipped: int

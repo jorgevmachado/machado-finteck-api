@@ -33,6 +33,7 @@ número e metadados visuais); não realiza movimentações, conciliação ou cá
 | Método | Rota | Ação |
 |---|---|---|
 | `POST` | `/accounts` | Cria uma conta e retorna seus dados (`201`) |
+| `POST` | `/accounts/seed` | Cria contas padrao ausentes (`200`) |
 | `GET` | `/accounts` | Lista contas, com suporte a filtros e paginação |
 | `GET` | `/accounts/{account_id}` | Busca uma conta por identificador |
 | `PUT` | `/accounts/{account_id}` | Atualiza os campos enviados e retorna `Message` |
@@ -74,6 +75,23 @@ Payload de criação:
   "account_number": "123456789",
   "is_active": true
 }
+```
+
+## Seed
+
+`POST /accounts/seed` segue o padrao de category: exige apenas autenticacao
+JWT (nao exige admin), nao recebe corpo e usa `accounts.json`, validado por
+`seeds.py`. As contas sao vinculadas ao usuario autenticado.
+
+Retorna `{"created": 14, "skipped": 0}` na primeira execucao em uma conta vazia.
+Nomes ja cadastrados para o mesmo usuario sao ignorados, sem alterar seus
+dados. Repetir a chamada retorna `created=0`; outros usuarios possuem seus
+proprios registros. A gravacao ocorre em uma unica transacao e o cache do
+usuario e invalidado apos o commit quando houver criacoes.
+
+```bash
+curl -X POST http://localhost:8000/accounts/seed \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Testes

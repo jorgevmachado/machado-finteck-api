@@ -12,7 +12,9 @@ from app.domain.institution.schema import (
     InstitutionCreateSchema,
     InstitutionSchema,
     InstitutionUpdateSchema,
+    InstitutionSeedSchema,
 )
+from app.domain.institution.seeds import load_seeds_institutions
 from app.models import Institution, User
 from app.shared.utils.string import to_snake_case
 from app.core.service import BaseService
@@ -78,3 +80,28 @@ class InstitutionService(
                 required=False,
             )
             return entity if entity is not None else await self._create(user, payload)
+
+    async def seed_defaults(self, user: User) -> InstitutionSeedSchema:
+        async with self._operation("seed_defaults", user.username):
+            payloads = load_seeds_institutions()
+            created: list[Institution] = []
+            skipped = 0
+            async with self.repository.transaction():
+                for payload in payloads:
+                    name_code = to_snake_case(payload.name)
+                    existing = await self._find(
+                        user_id=user.id,
+                        filters={"name_code": name_code},
+                        required=False,
+                    )
+                    if existing is not None:
+                        skipped += 1
+                        continue
+                    entity = self._build_entity(
+                        user.id, {"name": payload.name, "name_code": name_code}
+                    )
+                    await self.repository.save(entity, user_id=user.id)
+                    created.append(entity)
+            if created:
+                await self._invalidate_cache(user, created[0], "seed_defaults")
+            return InstitutionSeedSchema(created=len(created), skipped=skipped)
