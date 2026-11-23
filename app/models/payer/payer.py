@@ -13,6 +13,7 @@ from app.models import utcnow
 if TYPE_CHECKING:
     from app.models import Payment
 
+
 @table_registry.mapped_as_dataclass
 class Payer:
     __tablename__ = "payers"

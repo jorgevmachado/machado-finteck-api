@@ -569,9 +569,7 @@ async def test_profile_contracts_preserve_seed_ownership_reconciliation_and_soft
     assert page.meta.total == 5 and len(page.items) == 2
     assert all(item.user_id in (None, owner.id) for item in page.items)
     # A instituição é do dono; o outro usuário não tem perfil para ela.
-    foreign = await repo.find_by_institution(
-        user_id=other.id, institution_id=custom.id
-    )
+    foreign = await repo.find_by_institution(user_id=other.id, institution_id=custom.id)
     assert foreign is None
 
     await service.update_profile(

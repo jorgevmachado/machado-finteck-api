@@ -47,5 +47,6 @@ def validate_batch_size(files: list[UploadFile]) -> None:
             detail=(f"A maximum of {MAX_BATCH_FILES} files can be uploaded at once."),
         )
 
+
 def calculate_hash(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()

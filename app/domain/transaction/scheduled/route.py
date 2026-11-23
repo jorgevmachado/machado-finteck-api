@@ -12,7 +12,8 @@ from app.core.security import get_current_user
 from app.domain.transaction.scheduled.schema import (
     ScheduledTransactionSchema,
     ScheduledTransactionCreateSchema,
-    ScheduledTransactionRequestCreateSchema, ScheduledTransactionRequestUpdateSchema
+    ScheduledTransactionRequestCreateSchema,
+    ScheduledTransactionRequestUpdateSchema,
 )
 from app.domain.transaction.scheduled.service import ScheduledTransactionService
 from app.models import User, TransactionDirectionEnum, TransactionStatusEnum
@@ -46,7 +47,7 @@ def scheduled_transaction_filter(
         status=status,
         direction=direction,
         clean_cache=clean_cache,
-        transaction_series_id=transaction_series_id
+        transaction_series_id=transaction_series_id,
     )
 
 
@@ -54,7 +55,11 @@ Service = Annotated[ScheduledTransactionService, Depends(scheduled_transaction_s
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-@router.post("/{transaction_series_id}", response_model=ScheduledTransactionSchema, status_code=HTTPStatus.CREATED)
+@router.post(
+    "/{transaction_series_id}",
+    response_model=ScheduledTransactionSchema,
+    status_code=HTTPStatus.CREATED,
+)
 async def create(
     service: Service,
     current_user: CurrentUser,
@@ -62,15 +67,15 @@ async def create(
     transaction_data: ScheduledTransactionRequestCreateSchema,
 ):
     payload = ScheduledTransactionCreateSchema.model_validate(
-        transaction_data.model_dump()
-        | {"transaction_series_id": transaction_series_id}
+        transaction_data.model_dump() | {"transaction_series_id": transaction_series_id}
     )
     return await service.create(user=current_user, payload=payload)
 
 
 @router.get(
     "/{transaction_series_id}",
-    response_model=CustomLimitOffsetPage[ScheduledTransactionSchema] | list[ScheduledTransactionSchema],
+    response_model=CustomLimitOffsetPage[ScheduledTransactionSchema]
+    | list[ScheduledTransactionSchema],
     status_code=HTTPStatus.OK,
 )
 async def list_all(
@@ -81,8 +86,7 @@ async def list_all(
 ):
     return await service.list_all(
         page_filter=FilterPage.build(
-            page_filter=page_filter,
-            transaction_series_id=transaction_series_id
+            page_filter=page_filter, transaction_series_id=transaction_series_id
         ),
         user=current_user,
     )
@@ -94,13 +98,16 @@ async def list_all(
     status_code=HTTPStatus.OK,
 )
 async def find_one(
-        transaction_series_id: UUID,
-        scheduled_transaction_id: UUID,
-        service: Service,
-        current_user: CurrentUser
+    transaction_series_id: UUID,
+    scheduled_transaction_id: UUID,
+    service: Service,
+    current_user: CurrentUser,
 ):
     return await service.find_by(
-        filters={"id": scheduled_transaction_id, "transaction_series_id": transaction_series_id},
+        filters={
+            "id": scheduled_transaction_id,
+            "transaction_series_id": transaction_series_id,
+        },
         user=current_user,
     )
 
@@ -122,7 +129,7 @@ async def update(
         identifier=scheduled_transaction_id,
         transaction_series_id=transaction_series_id,
         payload=payload,
-        user=current_user
+        user=current_user,
     )
 
 
@@ -140,5 +147,5 @@ async def delete(
     return await service.delete_scheduled(
         user=current_user,
         identifier=scheduled_transaction_id,
-        transaction_series_id=transaction_series_id
+        transaction_series_id=transaction_series_id,
     )

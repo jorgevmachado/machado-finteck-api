@@ -121,9 +121,7 @@ def upgrade() -> None:
     )
 
     bind = op.get_bind()
-    for user_id, institution_code, profile_name in bind.execute(
-        SELECT_LEGACY
-    ).all():
+    for user_id, institution_code, profile_name in bind.execute(SELECT_LEGACY).all():
         name = _institution_name(institution_code, profile_name)
         name_code = _name_code(name, institution_code)
 

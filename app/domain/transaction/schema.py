@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.domain.account.schema import AccountSchema
 from app.domain.category import SubcategorySchema
 from app.domain.credit_card.schema import CreditCardSchema
+from app.domain.receipt.payment.schema import PaymentSchema
 from app.models import TransactionDirectionEnum, TransactionStatusEnum
 
 
@@ -24,6 +25,7 @@ class TransactionSchema(BaseModel):
     subcategory: SubcategorySchema | None = None
     settled_on: date | None = None
     expected_on: date
+    receipt_payment: PaymentSchema | None = None
     created_at: datetime
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
@@ -40,6 +42,7 @@ class TransactionCreateSchema(BaseModel):
     expected_on: date
     credit_card_id: UUID | None = None
     subcategory_id: UUID | None = None
+    receipt_payment_id: UUID | None = None
 
 
 class TransactionUpdateSchema(TransactionCreateSchema):

@@ -89,3 +89,34 @@ def test_response_serializes_nested_account_and_money(transaction_response):
     assert serialized["account"]["id"] == transaction_response["account"]["id"]
     assert serialized["credit_card"] is None
     assert serialized["subcategory"] is None
+    assert serialized["receipt_payment"] is None
+
+
+def test_create_links_the_transaction_to_a_receipt_payment(transaction_data):
+    payment_id = uuid4()
+    payload = TransactionCreateSchema.model_validate(
+        transaction_data | {"receipt_payment_id": str(payment_id)}
+    )
+
+    assert payload.receipt_payment_id == payment_id
+
+
+def test_create_keeps_the_receipt_payment_link_optional(transaction_data):
+    payload = TransactionCreateSchema.model_validate(transaction_data)
+
+    assert payload.receipt_payment_id is None
+
+
+def test_create_rejects_a_malformed_receipt_payment_id(transaction_data):
+    with pytest.raises(ValidationError) as caught:
+        TransactionCreateSchema.model_validate(
+            transaction_data | {"receipt_payment_id": "not-a-uuid"}
+        )
+
+    assert caught.value.errors()[0]["loc"] == ("receipt_payment_id",)
+
+
+def test_update_can_clear_the_receipt_payment_link():
+    payload = TransactionUpdateSchema(receipt_payment_id=None)
+
+    assert payload.model_dump(exclude_unset=True) == {"receipt_payment_id": None}

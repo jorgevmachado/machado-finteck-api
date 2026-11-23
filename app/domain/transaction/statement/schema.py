@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import AliasPath, BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.account.schema import AccountSchema
+from app.domain.receipt.payment.schema import PaymentSchema
 from app.domain.category import SubcategorySchema
 from app.domain.credit_card.schema import CreditCardSchema
 from app.domain.transaction.series.schema import TransactionSeriesSchema
@@ -28,6 +29,7 @@ class StatementFilterSchema(FilterPage):
     account_id: UUID | None = None
     credit_card_id: UUID | None = None
     subcategory_id: UUID | None = None
+    receipt_payment_id: UUID | None = None
     direction: TransactionDirectionEnum | None = None
     status: TransactionStatusEnum | None = None
     search: str | None = Field(default=None, min_length=1, max_length=200)
@@ -58,6 +60,7 @@ class StatementEntrySchema(BaseModel):
     account: AccountSchema
     credit_card: CreditCardSchema | None = None
     subcategory: SubcategorySchema | None = None
+    receipt_payment: PaymentSchema | None = None
     subcategory_name: str | None = Field(
         default=None, validation_alias=AliasPath("subcategory", "name")
     )

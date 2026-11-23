@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import httpx
@@ -805,7 +805,9 @@ def test_statement_http_validates_and_delegates(statement_client, user):
     )
 
 
-@pytest.mark.parametrize("field", ["account_id", "credit_card_id", "subcategory_id"])
+@pytest.mark.parametrize(
+    "field", ["account_id", "credit_card_id", "subcategory_id", "receipt_payment_id"]
+)
 def test_statement_http_accepts_uuid_filters(statement_client, user, field):
     client, service = statement_client
     identifier = uuid4()
@@ -824,7 +826,9 @@ def test_statement_http_accepts_uuid_filters(statement_client, user, field):
     )
 
 
-@pytest.mark.parametrize("field", ["account_id", "credit_card_id", "subcategory_id"])
+@pytest.mark.parametrize(
+    "field", ["account_id", "credit_card_id", "subcategory_id", "receipt_payment_id"]
+)
 def test_statement_http_rejects_invalid_uuid_filters(statement_client, field):
     client, service = statement_client
     response = client.get(
@@ -1041,6 +1045,27 @@ async def test_repository_loads_relations_before_synchronous_serialization(
     assert scheduled_dto.transaction_serie.account.name == "Main account"
     assert scheduled_dto.transaction_serie.credit_card.name == "Main card"
     assert scheduled_dto.transaction_serie.subcategory.name == "Groceries"
+
+
+@pytest.mark.asyncio
+async def test_repository_eager_loads_the_linked_receipt_payment(user):
+    """`receipt_payment` precisa vir carregado: a serialização do DTO é síncrona."""
+    session = MagicMock(spec=AsyncSession)
+    session.scalars = AsyncMock(return_value=MagicMock())
+    session.scalars.return_value.all.return_value = []
+
+    await StatementRepository(session).transactions(user_id=user.id, filters=period())
+
+    query = session.scalars.await_args.args[0]
+    # `lazyload("*")` também aparece em `_with_options`, mas seu `path` é uma tupla de
+    # atributos, não um `orm.Path` — por isso o filtro é por `path.path`.
+    loaded = {
+        option.path.path[1].key
+        for option in query._with_options
+        if hasattr(getattr(option, "path", None), "path")
+    }
+
+    assert loaded == {"account", "credit_card", "receipt_payment", "subcategory"}
 
 
 @pytest.mark.asyncio

@@ -160,7 +160,8 @@ async def test_entity_builder_validates_and_normalizes_nested_payload(
     assert entity.identification_rules[0].pattern == "BANK"
     with pytest.raises(ValidationError):
         service._build_entity(
-            user.id, {"name": "Bank", "institution_id": str(BANK.id), "is_active": "yes"}
+            user.id,
+            {"name": "Bank", "institution_id": str(BANK.id), "is_active": "yes"},
         )
     rules_repository.save_profile.assert_not_awaited()
 

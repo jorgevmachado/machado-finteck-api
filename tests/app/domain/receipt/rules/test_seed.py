@@ -122,7 +122,9 @@ async def test_seed_uses_one_transaction_and_correct_scope(service, repository, 
             assert entity.user_id == user.id
             assert entity.identification_rules
         assert all(child.profile_id == entity.id for child in entity.field_rules)
-    assert {entity.institution_code for entity in entities if entity.institution_id} == {
+    assert {
+        entity.institution_code for entity in entities if entity.institution_id
+    } == {
         "NU_PAGAMENTOS",
         "ITAU_UNIBANCO",
         "CAIXA_ECONOMICA_FEDERAL",
@@ -181,9 +183,7 @@ async def test_catalog_validation_failure_uses_standard_handler(
 async def test_normal_create_derives_code_from_institution_name_code(
     service, repository, user
 ):
-    institution = SimpleNamespace(
-        id=uuid4(), name="Bank", name_code="meu_banco"
-    )
+    institution = SimpleNamespace(id=uuid4(), name="Bank", name_code="meu_banco")
     service.institution_service.find_by = AsyncMock(return_value=institution)
     payload = ReceiptRulesCreateSchema(name="Bank", institution_id=institution.id)
     result = await service.create_profile(user, payload)
@@ -222,9 +222,7 @@ async def test_seed_second_owner_preserves_shared_general_and_creates_private_ba
 
 
 @pytest.mark.asyncio
-async def test_seed_second_save_failure_aborts_transaction(
-    service, repository, user
-):
+async def test_seed_second_save_failure_aborts_transaction(service, repository, user):
     repository.save_profile.side_effect = [None, RuntimeError("second save failed")]
     with pytest.raises(HTTPException):
         await service.seed_defaults(user)

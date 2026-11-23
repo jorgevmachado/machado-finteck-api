@@ -74,9 +74,7 @@ class InstitutionService(
                 await self._resync_profile_codes(entity_id, data["name_code"])
         return data
 
-    async def _resync_profile_codes(
-        self, institution_id: UUID, name_code: str
-    ) -> None:
+    async def _resync_profile_codes(self, institution_id: UUID, name_code: str) -> None:
         """Perfis guardam `institution_code` como snapshot de `name_code`."""
         code = name_code.upper()
         await self.repository.session.execute(
@@ -108,7 +106,9 @@ class InstitutionService(
         )
         if entity is not None:
             return entity
-        entity = self._build_entity(user.id, {"name": payload.name, "name_code": name_code})
+        entity = self._build_entity(
+            user.id, {"name": payload.name, "name_code": name_code}
+        )
         return await self.repository.save(entity, user_id=user.id)
 
     async def seed_defaults(self, user: User) -> InstitutionSeedSchema:

@@ -12,7 +12,7 @@ from app.models.receipt import (
     ReceiptInterpretationProfile,
     ReceiptStatusEnum,
     Receipt,
-    Payment
+    Payment,
 )
 
 from app.models.transaction import (
@@ -22,7 +22,7 @@ from app.models.transaction import (
     TransactionFrequencyUnitEnum,
     Transaction,
     TransactionSeries,
-    ScheduledTransaction
+    ScheduledTransaction,
 )
 
 __all__ = [

@@ -298,9 +298,7 @@ class ReceiptRulesService(
             async with self.repository.transaction():
                 await self.repository.lock_seed()
                 for payload in payloads:
-                    owner_id = (
-                        user_id if payload.institution_name is not None else None
-                    )
+                    owner_id = user_id if payload.institution_name is not None else None
                     institution = (
                         await self.institution_service.resolve_in_transaction(
                             user, payload.institution_name
@@ -318,7 +316,9 @@ class ReceiptRulesService(
                         skipped += 1
                         continue
                     await self.repository.save_profile(
-                        self._build_aggregate(owner_id, payload, institution=institution)
+                        self._build_aggregate(
+                            owner_id, payload, institution=institution
+                        )
                     )
                     created += 1
                 result = ReceiptRulesSeedSchema(created=created, skipped=skipped)

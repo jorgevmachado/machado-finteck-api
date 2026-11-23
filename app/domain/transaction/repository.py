@@ -23,6 +23,7 @@ class TransactionRepository(BaseRepository[Transaction]):
         "account_id",
         "subcategory_id",
         "credit_card_id",
+        "receipt_payment_id",
         "direction",
         "status",
     )
@@ -30,6 +31,7 @@ class TransactionRepository(BaseRepository[Transaction]):
         selectinload(Transaction.account),
         selectinload(Transaction.subcategory),
         selectinload(Transaction.credit_card),
+        selectinload(Transaction.receipt_payment),
     )
 
     async def seed_account_ids(self, *, user_id: UUID) -> list[UUID]:

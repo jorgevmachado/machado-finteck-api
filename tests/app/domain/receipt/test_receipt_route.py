@@ -1,4 +1,7 @@
+from datetime import date
+from decimal import Decimal
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -16,10 +19,12 @@ from app.domain.receipt.route import (
     upload_receipt,
     upload_batch,
 )
+from app.domain.receipt.payment.schema import PaymentSchema
 from app.domain.receipt.schema import ReceiptSchema
 from app.domain.receipt.service import ReceiptService
 from app.models import ReceiptStatusEnum, utcnow
 from app.shared.schemas import Message
+from app.shared.utils.string import to_snake_case
 
 
 @pytest.mark.asyncio
@@ -57,6 +62,48 @@ def receipt():
         file_name="receipt.pdf",
         file_type="application/pdf",
         file_size=7,
+        created_at=utcnow(),
+    )
+
+
+@pytest.fixture
+def payment():
+    """`confirm` devolve o `Payment` criado; a rota serializa o objeto com `PaymentSchema`."""
+
+    def named_entity(name):
+        return SimpleNamespace(
+            id=uuid4(),
+            name=name,
+            name_code=to_snake_case(name),
+            created_at=utcnow(),
+        )
+
+    return SimpleNamespace(
+        id=uuid4(),
+        amount=Decimal("123.45"),
+        payer=named_entity("Payer"),
+        receipt=SimpleNamespace(
+            id=uuid4(),
+            status=ReceiptStatusEnum.PROCESSED,
+            file_name="receipt.pdf",
+            file_type="application/pdf",
+            file_size=7,
+            created_at=utcnow(),
+        ),
+        subcategory=SimpleNamespace(
+            id=uuid4(),
+            name="Groceries",
+            icon=None,
+            color=None,
+            is_active=True,
+            order=1,
+            created_at=utcnow(),
+        ),
+        beneficiary=named_entity("Beneficiary"),
+        payment_date=date(2026, 10, 26),
+        source_institution=named_entity("Source"),
+        description="Monthly payment",
+        destination_institution=None,
         created_at=utcnow(),
     )
 
@@ -148,18 +195,21 @@ def test_read_routes_require_authentication(service, path):
     service.find_one.assert_not_awaited()
 
 
-def test_confirm_route_delegates_payload_and_returns_message(
-    receipt_client, service, user, confirm_payload
+def test_confirm_route_delegates_payload_and_returns_the_payment(
+    receipt_client, service, user, confirm_payload, payment
 ):
     receipt_id = uuid4()
-    service.confirm.return_value = Message(message="Receipt confirmed successfully")
+    service.confirm.return_value = payment
 
     response = receipt_client.post(
         f"/receipts/{receipt_id}/confirm", json=confirm_payload.model_dump(mode="json")
     )
 
     assert response.status_code == 200
-    assert response.json() == {"message": "Receipt confirmed successfully"}
+    assert response.json() == PaymentSchema.model_validate(payment).model_dump(
+        mode="json"
+    )
+    assert response.json()["id"] == str(payment.id)
     service.confirm.assert_awaited_once_with(
         receipt_id=receipt_id, user=user, payload=confirm_payload
     )

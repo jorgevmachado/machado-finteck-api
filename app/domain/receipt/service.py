@@ -32,7 +32,6 @@ from app.domain.receipt.schema import (
     ReceiptCreateSchema,
 )
 from app.models import User, Receipt, ReceiptStatusEnum
-from app.shared.schemas import Message
 from app.core.service import BaseService
 
 logger = logging.getLogger(__name__)
@@ -267,7 +266,7 @@ class ReceiptService(BaseService[Receipt, ReceiptCreateSchema]):
             else:
                 destination_institution = None
 
-            await self.payment_service.create_payment(
+            payment = await self.payment_service.create_payment(
                 user=user,
                 payer_id=payer.id,
                 receipt_id=receipt.id,
@@ -284,8 +283,10 @@ class ReceiptService(BaseService[Receipt, ReceiptCreateSchema]):
 
             async with self.repository.transaction():
                 receipt.status = ReceiptStatusEnum.PROCESSED
-                await self.repository.save(entity=receipt, user_id=user.id)
-            return Message(message="Receipt confirmed successfully")
+                payment.receipt = await self.repository.save(
+                    entity=receipt, user_id=user.id
+                )
+            return payment
 
     async def update_receipt(
         self, receipt_id: UUID, user: User, payload: ReceiptConfirmSchema

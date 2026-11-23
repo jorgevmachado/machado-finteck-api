@@ -208,7 +208,8 @@ async def test_repository_failures_are_logged_and_propagated(
     with (
         patch("app.core.service.base.log_service_success") as success,
         patch(
-            "app.core.service.base.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
         pytest.raises(HTTPException) as caught,
     ):

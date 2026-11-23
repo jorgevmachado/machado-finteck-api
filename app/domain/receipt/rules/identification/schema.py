@@ -9,6 +9,7 @@ from app.domain.receipt.rules.validate import validate_pattern
 
 Pattern = Annotated[str, Field(min_length=1, max_length=2000)]
 
+
 class ReceiptIdentificationRuleCreateSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pattern: Pattern
@@ -21,10 +22,12 @@ class ReceiptIdentificationRuleCreateSchema(BaseModel):
         validate_pattern(pattern)
         return pattern
 
+
 class ReceiptIdentificationRuleSchema(
     ResponseSchema, ReceiptIdentificationRuleCreateSchema
 ):
     is_active: bool
+
 
 class ReceiptIdentificationRuleReconcileSchema(ReceiptIdentificationRuleCreateSchema):
     id: UUID | None = None

@@ -138,7 +138,9 @@ class TestAuthService:
             await service.login(LoginSchema(credential="ash", password="StrongPass123"))
 
         assert exc.value.status_code == HTTPStatus.UNAUTHORIZED
-        assert exc.value.detail == "Account locked due to multiple failed login attempts"
+        assert (
+            exc.value.detail == "Account locked due to multiple failed login attempts"
+        )
 
     @staticmethod
     @pytest.mark.asyncio

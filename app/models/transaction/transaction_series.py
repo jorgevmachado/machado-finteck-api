@@ -11,8 +11,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database.base import table_registry, default_lazy
 from app.models import utcnow
-from app.models.transaction.enums import TransactionDirectionEnum, TransactionKindEnum, \
-    TransactionFrequencyUnitEnum
+from app.models.transaction.enums import (
+    TransactionDirectionEnum,
+    TransactionKindEnum,
+    TransactionFrequencyUnitEnum,
+)
 
 if TYPE_CHECKING:
     from app.models import Account, Subcategory, CreditCard, ScheduledTransaction
@@ -32,7 +35,9 @@ class TransactionSeries:
         back_populates="transaction_series",
     )
 
-    subcategory_id: Mapped[UUID | None] = mapped_column(ForeignKey("subcategories.id"), nullable=True)
+    subcategory_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("subcategories.id"), nullable=True
+    )
 
     subcategory: Mapped["Subcategory | None"] = relationship(
         init=False,
@@ -40,7 +45,9 @@ class TransactionSeries:
         back_populates="transaction_series",
     )
 
-    credit_card_id: Mapped[UUID | None] = mapped_column(ForeignKey("credit_cards.id"), nullable=True)
+    credit_card_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("credit_cards.id"), nullable=True
+    )
 
     credit_card: Mapped["CreditCard | None"] = relationship(
         init=False,
@@ -55,11 +62,13 @@ class TransactionSeries:
     )
 
     frequency_unit: Mapped[TransactionFrequencyUnitEnum] = mapped_column(
-        SAEnum(TransactionFrequencyUnitEnum, name="transactionfrequencyunitenum"), nullable=False
+        SAEnum(TransactionFrequencyUnitEnum, name="transactionfrequencyunitenum"),
+        nullable=False,
     )
 
     direction: Mapped[TransactionDirectionEnum] = mapped_column(
-        SAEnum(TransactionDirectionEnum, name="transactiondirectionenum"), nullable=False
+        SAEnum(TransactionDirectionEnum, name="transactiondirectionenum"),
+        nullable=False,
     )
 
     frequency_interval: Mapped[int] = mapped_column(

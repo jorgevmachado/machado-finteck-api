@@ -435,16 +435,19 @@ async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
     source = SimpleNamespace(id=uuid4())
     destination = SimpleNamespace(id=uuid4())
     service.institution_service.resolve.side_effect = [source, destination]
+    payment = SimpleNamespace(id=uuid4(), receipt=None)
 
     async def create_payment(**kwargs):
         assert receipt.status == ReceiptStatusEnum.RECEIVED
         service.repository.save.assert_not_awaited()
+        return payment
 
     service.payment_service.create_payment.side_effect = create_payment
 
     result = await service.confirm(receipt.id, user, confirm_payload)
 
-    assert result.message == "Receipt confirmed successfully"
+    assert result is payment
+    assert payment.receipt is receipt
     service.payment_service.check_receipt.assert_awaited_once_with(receipt.id, user)
     service.payer_service.resolve.assert_awaited_once_with(
         user=user, name=confirm_payload.payer

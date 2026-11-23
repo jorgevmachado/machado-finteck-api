@@ -4,21 +4,24 @@ from typing import Generic, TypeVar
 from uuid import UUID
 
 from app.domain.receipt.rules.field.schema import ReceiptFieldRuleReconcileSchema
-from app.domain.receipt.rules.identification.schema import ReceiptIdentificationRuleReconcileSchema
+from app.domain.receipt.rules.identification.schema import (
+    ReceiptIdentificationRuleReconcileSchema,
+)
 
 Rule = TypeVar(
-    "Rule",
-    ReceiptFieldRuleReconcileSchema,
-    ReceiptIdentificationRuleReconcileSchema
+    "Rule", ReceiptFieldRuleReconcileSchema, ReceiptIdentificationRuleReconcileSchema
 )
+
 
 class ProfileReconciliationError(ValueError):
     """The requested final child collection violates aggregate invariants."""
+
 
 @dataclass(frozen=True)
 class RuleReconciliationPlan(Generic[Rule]):
     entries: tuple[Rule, ...]
     remove_ids: tuple[UUID, ...]
+
 
 def build_reconciliation_plan(
     entries: Sequence[Rule], existing_ids: Sequence[UUID]

@@ -80,7 +80,10 @@ class TestAuthRepository:
         repository = AuthRepository(session=session)
 
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("app.domain.auth.repository.get_password_hash", lambda value: f"hash:{value}")
+            mp.setattr(
+                "app.domain.auth.repository.get_password_hash",
+                lambda value: f"hash:{value}",
+            )
             await repository.convert_password(uuid4(), "secret")
 
         session.add.assert_called_once()

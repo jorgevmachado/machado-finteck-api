@@ -14,7 +14,7 @@ from app.models import utcnow
 from app.models.transaction.enums import TransactionDirectionEnum, TransactionStatusEnum
 
 if TYPE_CHECKING:
-    from app.models import Account, Subcategory, CreditCard
+    from app.models import Account, Subcategory, CreditCard, Payment
 
 
 @table_registry.mapped_as_dataclass
@@ -31,7 +31,9 @@ class Transaction:
         back_populates="transactions",
     )
 
-    subcategory_id: Mapped[UUID | None] = mapped_column(ForeignKey("subcategories.id"), nullable=True)
+    subcategory_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("subcategories.id"), nullable=True
+    )
 
     subcategory: Mapped["Subcategory | None"] = relationship(
         init=False,
@@ -39,9 +41,21 @@ class Transaction:
         back_populates="transactions",
     )
 
-    credit_card_id: Mapped[UUID | None] = mapped_column(ForeignKey("credit_cards.id"), nullable=True)
+    credit_card_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("credit_cards.id"), nullable=True
+    )
 
     credit_card: Mapped["CreditCard | None"] = relationship(
+        init=False,
+        lazy=default_lazy,
+        back_populates="transactions",
+    )
+
+    receipt_payment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("payments.id"), nullable=True
+    )
+
+    receipt_payment: Mapped["Payment | None"] = relationship(
         init=False,
         lazy=default_lazy,
         back_populates="transactions",
@@ -50,7 +64,8 @@ class Transaction:
     name: Mapped[str] = mapped_column(String, nullable=False)
 
     direction: Mapped[TransactionDirectionEnum] = mapped_column(
-        SAEnum(TransactionDirectionEnum, name="transactiondirectionenum"), nullable=False
+        SAEnum(TransactionDirectionEnum, name="transactiondirectionenum"),
+        nullable=False,
     )
 
     status: Mapped[TransactionStatusEnum] = mapped_column(

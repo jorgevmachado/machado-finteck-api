@@ -26,9 +26,7 @@ async def test_create_builds_owned_entity_and_invalidates_cache(
     assert result.status == TransactionStatusEnum.PENDING
     scheduled_repository.save.assert_awaited_once_with(result, user_id=user.id)
     scheduled_repository.transaction.assert_called_once()
-    scheduled_service._invalidate_cache.assert_awaited_once_with(
-        user, result, "create"
-    )
+    scheduled_service._invalidate_cache.assert_awaited_once_with(user, result, "create")
 
 
 async def test_build_entity_requires_settled_on_for_settled_transaction(
