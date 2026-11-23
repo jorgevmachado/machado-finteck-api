@@ -12,8 +12,9 @@ import redis
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 
-from app.models import utcnow
-
+# O ambiente precisa estar completo ANTES de qualquer import de `app.*`: `app.core.settings`
+# instancia `Settings()` no import do módulo (e `app.core.database` cria o engine), então um
+# import precoce de `app` estoura `ValidationError` no CI, onde não existe `.env`.
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
@@ -21,9 +22,10 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 
-import app.core.cache.redis as core_redis
-from app.core.database import get_session
-from app.main import app
+import app.core.cache.redis as core_redis  # noqa: E402
+from app.core.database import get_session  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import utcnow  # noqa: E402
 
 
 class FakeSession:
