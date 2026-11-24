@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class AccountTypeEnum(str, Enum):
     CHECKING = "CHECKING"
     SAVINGS = "SAVINGS"

@@ -11,6 +11,7 @@ class InstitutionSchema(BaseModel):
 
     id: UUID
     name: str
+    name_code: str
     created_at: datetime
     updated_at: datetime | None = None
     deleted_at: datetime | None = None

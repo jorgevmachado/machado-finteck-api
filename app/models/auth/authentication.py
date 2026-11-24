@@ -33,7 +33,9 @@ class Authentication:
     total_failures: Mapped[int | None] = mapped_column(
         Integer, nullable=True, default=0
     )
-    failed_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    failed_attempts: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0
+    )
     last_authentication_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )

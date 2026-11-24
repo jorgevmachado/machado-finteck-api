@@ -12,13 +12,16 @@ from app.domain.receipt.service import ReceiptService
 from app.domain.receipt.schema import (
     ReceiptUploadSchema,
     BatchReceiptSchema,
-    ReceiptSchema, ReceiptConfirmSchema,
+    ReceiptSchema,
+    ReceiptConfirmSchema,
 )
 from app.models import User
-from app.shared.schemas import FilterPage, Message
+from app.shared.schemas import FilterPage
 
 from app.domain.receipt.rules.route import router as receipt_rules_router
 from app.domain.receipt.payment.route import router as receipt_payment_router
+from app.domain.receipt.payment.schema import PaymentSchema
+
 router = APIRouter()
 
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -41,7 +44,10 @@ def receipt_filter(
 Service = Annotated[ReceiptService, Depends(receipt_service)]
 
 router.include_router(receipt_rules_router, prefix="/rules", tags=["Receipt Rules"])
-router.include_router(receipt_payment_router, prefix="/payments", tags=["Receipt Payment"])
+router.include_router(
+    receipt_payment_router, prefix="/payments", tags=["Receipt Payment"]
+)
+
 
 @router.post("/upload", response_model=ReceiptUploadSchema)
 async def upload_receipt(
@@ -78,9 +84,20 @@ async def list_all(
 async def find_one(receipt_id: UUID, service: Service, current_user: CurrentUser):
     return await service.find_one(receipt_id=receipt_id, user=current_user)
 
-@router.post("/{receipt_id}/confirm", response_model=Message, status_code=HTTPStatus.OK)
-async def confirm_receipt(receipt_id: UUID, service: Service, current_user: CurrentUser, payload: ReceiptConfirmSchema):
-    return await service.confirm(receipt_id=receipt_id, user=current_user, payload=payload)
+
+@router.post(
+    "/{receipt_id}/confirm", response_model=PaymentSchema, status_code=HTTPStatus.OK
+)
+async def confirm_receipt(
+    receipt_id: UUID,
+    service: Service,
+    current_user: CurrentUser,
+    payload: ReceiptConfirmSchema,
+):
+    return await service.confirm(
+        receipt_id=receipt_id, user=current_user, payload=payload
+    )
+
 
 @router.put("/{receipt_id}", response_model=ReceiptSchema, status_code=HTTPStatus.OK)
 async def update_receipt(
@@ -89,4 +106,6 @@ async def update_receipt(
     current_user: CurrentUser,
     payload: ReceiptConfirmSchema,
 ):
-    return await service.update_receipt(receipt_id=receipt_id, user=current_user, payload=payload)
+    return await service.update_receipt(
+        receipt_id=receipt_id, user=current_user, payload=payload
+    )

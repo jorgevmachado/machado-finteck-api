@@ -12,10 +12,15 @@ from app.core.security import get_current_user
 from app.domain.transaction.series.schema import (
     TransactionSeriesSchema,
     TransactionSeriesCreateSchema,
-    TransactionSeriesUpdateSchema
+    TransactionSeriesUpdateSchema,
 )
 from app.domain.transaction.series.service import TransactionSeriesService
-from app.models import User, TransactionDirectionEnum, TransactionKindEnum, TransactionFrequencyUnitEnum
+from app.models import (
+    User,
+    TransactionDirectionEnum,
+    TransactionKindEnum,
+    TransactionFrequencyUnitEnum,
+)
 from app.shared.schemas import FilterPage, Message
 
 router = APIRouter()
@@ -64,7 +69,8 @@ async def create(
 
 @router.get(
     "",
-    response_model=CustomLimitOffsetPage[TransactionSeriesSchema] | list[TransactionSeriesSchema],
+    response_model=CustomLimitOffsetPage[TransactionSeriesSchema]
+    | list[TransactionSeriesSchema],
     status_code=HTTPStatus.OK,
 )
 async def list_all(
@@ -83,7 +89,9 @@ async def list_all(
     response_model=TransactionSeriesSchema,
     status_code=HTTPStatus.OK,
 )
-async def find_one(transaction_series_id: UUID, service: Service, current_user: CurrentUser):
+async def find_one(
+    transaction_series_id: UUID, service: Service, current_user: CurrentUser
+):
     return await service.find_by(
         filters={"id": transaction_series_id},
         user=current_user,

@@ -284,9 +284,7 @@ async def test_build_entity_rejects_non_string_name(service, user):
 
 
 async def test_build_entity_converts_integer_limit_to_decimal(service, user):
-    credit_card = service._build_entity(
-        user.id, {**_valid_data(), "limit": 5000}
-    )
+    credit_card = service._build_entity(user.id, {**_valid_data(), "limit": 5000})
 
     assert credit_card.limit == Decimal("5000")
 

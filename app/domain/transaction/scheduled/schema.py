@@ -32,6 +32,7 @@ class ScheduledTransactionSchema(BaseModel):
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
 
+
 class ScheduledTransactionRequestCreateSchema(BaseModel):
     name: str
     note: str | None = None
@@ -46,6 +47,7 @@ class ScheduledTransactionRequestCreateSchema(BaseModel):
     credit_card_id: UUID | None = None
     subcategory_id: UUID | None = None
 
+
 class ScheduledTransactionRequestUpdateSchema(ScheduledTransactionRequestCreateSchema):
     name: str | None = None
     value: Decimal | None = None
@@ -55,8 +57,10 @@ class ScheduledTransactionRequestUpdateSchema(ScheduledTransactionRequestCreateS
     occurrence_on: date | None = None
     occurrence_index: int | None = None
 
+
 class ScheduledTransactionCreateSchema(ScheduledTransactionRequestCreateSchema):
     transaction_series_id: UUID
+
 
 class ScheduledTransactionUpdateSchema(ScheduledTransactionRequestUpdateSchema):
     transaction_series_id: UUID | None = None

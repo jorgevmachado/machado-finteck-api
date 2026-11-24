@@ -41,6 +41,7 @@ async def test_lookup_scopes_to_owner_and_loads_relations(
         "account",
         "subcategory",
         "credit_card",
+        "receipt_payment",
     }
 
 
@@ -50,6 +51,7 @@ async def test_lookup_scopes_to_owner_and_loads_relations(
         ("account_id", uuid4()),
         ("subcategory_id", uuid4()),
         ("credit_card_id", uuid4()),
+        ("receipt_payment_id", uuid4()),
         ("direction", TransactionDirectionEnum.IN),
         ("status", TransactionStatusEnum.SETTLED),
     ],
@@ -111,13 +113,16 @@ async def test_delete_rejects_foreign_entity_before_sql(
 async def test_seed_rejects_occurrence_linked_to_different_series_before_writing(
     transaction_session, series_entity, transaction_payload, user
 ):
+    # `ScheduledTransaction` não carrega `receipt_payment_id`: o vínculo com o pagamento é
+    # da transação efetivada, não da ocorrência projetada. Por isso o payload é filtrado.
+    occurrence_fields = transaction_payload.model_dump(exclude={"receipt_payment_id"})
     series_entity.scheduled_transactions = [
         ScheduledTransaction(
             user_id=user.id,
             transaction_series_id=uuid4(),
             occurrence_on=transaction_payload.expected_on,
             occurrence_index=1,
-            **transaction_payload.model_dump(),
+            **occurrence_fields,
         )
     ]
     transaction_session.info = {}

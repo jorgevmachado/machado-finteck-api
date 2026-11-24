@@ -109,7 +109,8 @@ async def test_resolve_translates_once_and_rolls_back(service, user, failure):
             target, failure, new=AsyncMock(side_effect=RuntimeError("database failure"))
         ),
         patch(
-            "app.core.service.base.handle_service_exception", wraps=handle_service_exception
+            "app.core.service.base.handle_service_exception",
+            wraps=handle_service_exception,
         ) as error,
         patch("app.core.service.base.log_service_success") as success,
         pytest.raises(HTTPException) as caught,

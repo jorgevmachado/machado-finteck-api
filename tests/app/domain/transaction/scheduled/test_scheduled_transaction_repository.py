@@ -13,9 +13,7 @@ pytestmark = pytest.mark.asyncio
 async def test_lookup_scopes_owner_and_loads_related_resources(
     transaction_session, scheduled_entity, user
 ):
-    transaction_session.scalars.return_value.unique.return_value.one_or_none.return_value = (
-        scheduled_entity
-    )
+    transaction_session.scalars.return_value.unique.return_value.one_or_none.return_value = scheduled_entity
     repository = ScheduledTransactionRepository(transaction_session)
     result = await repository.find_by(
         user_id=user.id,

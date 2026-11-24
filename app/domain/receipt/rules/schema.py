@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import (
     AfterValidator,
@@ -57,15 +58,15 @@ class _ReceiptRulesInputSchema(_InputSchema):
 
 
 class ReceiptRulesCreateSchema(_ReceiptRulesInputSchema):
-    institution_code: InstitutionCode
+    institution_id: UUID
 
 
 class ReceiptRulesSeedEntrySchema(_ReceiptRulesInputSchema):
-    institution_code: InstitutionCode | None
+    institution_name: str | None
 
     @model_validator(mode="after")
     def validate_general(self) -> ReceiptRulesSeedEntrySchema:
-        if self.institution_code is None and self.identification_rules:
+        if self.institution_name is None and self.identification_rules:
             raise ValueError("General profile cannot contain identification rules")
         return self
 
@@ -91,6 +92,7 @@ class ReceiptRulesUpdateSchema(_InputSchema):
 class ReceiptRulesSchema(ResponseSchema):
     name: str
     is_active: bool
+    institution_id: UUID | None
     institution_code: str | None
     scope: ProfileScope
     identification_rules: list[ReceiptIdentificationRuleSchema]
@@ -125,7 +127,7 @@ class ReceiptRulesFilter(FilterPage):
     limit: int | None = Field(12, ge=1)
     is_active: bool | None = None
     name: ProfileName | None = None
-    institution_code: InstitutionCode | None = None
+    institution_id: UUID | None = None
     scope: ProfileScope | None = None
 
 

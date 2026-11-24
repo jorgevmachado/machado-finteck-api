@@ -10,7 +10,7 @@ def load_default_receipt_rules() -> list[ReceiptRulesSeedEntrySchema]:
     payloads = TypeAdapter(list[ReceiptRulesSeedEntrySchema]).validate_json(
         catalog.read_text(encoding="utf-8")
     )
-    codes = [payload.institution_code for payload in payloads]
-    if len(codes) != len(set(codes)):
-        raise ValueError("Receipt seed catalog contains duplicate profile codes")
+    names = [payload.institution_name for payload in payloads]
+    if len(names) != len(set(names)):
+        raise ValueError("Receipt seed catalog contains duplicate institution names")
     return payloads

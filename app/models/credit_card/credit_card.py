@@ -6,7 +6,16 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, Enum as SAEnum, Boolean, Integer, Numeric
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    Enum as SAEnum,
+    Boolean,
+    Integer,
+    Numeric,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database.base import table_registry, default_lazy
@@ -16,6 +25,7 @@ from app.models.credit_card.enums import CreditCardBrandEnum
 
 if TYPE_CHECKING:
     from app.models import ScheduledTransaction, Transaction, TransactionSeries
+
 
 @table_registry.mapped_as_dataclass
 class CreditCard:
@@ -104,4 +114,3 @@ class CreditCard:
         repr=False,
         back_populates="credit_card",
     )
-

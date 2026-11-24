@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class CreditCardBrandEnum(str, Enum):
     VISA = "VISA"
     MASTERCARD = "MASTERCARD"

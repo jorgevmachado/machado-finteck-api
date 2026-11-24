@@ -29,6 +29,7 @@ class StatementRepository(BaseRepository[Transaction]):
                     lazyload("*"),
                     selectinload(Transaction.account),
                     selectinload(Transaction.credit_card),
+                    selectinload(Transaction.receipt_payment),
                     selectinload(Transaction.subcategory).selectinload(
                         Subcategory.category
                     ),

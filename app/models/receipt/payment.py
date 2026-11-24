@@ -13,7 +13,14 @@ from app.core.database.base import table_registry, default_lazy
 from app.models import utcnow
 
 if TYPE_CHECKING:
-    from app.models import Receipt, Beneficiary, Subcategory, Institution, Payer
+    from app.models import (
+        Receipt,
+        Beneficiary,
+        Subcategory,
+        Institution,
+        Payer,
+        Transaction,
+    )
 
 
 @table_registry.mapped_as_dataclass
@@ -30,7 +37,9 @@ class Payment:
         back_populates="payments",
     )
 
-    beneficiary_id: Mapped[UUID] = mapped_column(ForeignKey("beneficiaries.id"), nullable=False)
+    beneficiary_id: Mapped[UUID] = mapped_column(
+        ForeignKey("beneficiaries.id"), nullable=False
+    )
 
     beneficiary: Mapped["Beneficiary"] = relationship(
         init=False,
@@ -38,7 +47,9 @@ class Payment:
         back_populates="payments",
     )
 
-    subcategory_id: Mapped[UUID] = mapped_column(ForeignKey("subcategories.id"), nullable=False)
+    subcategory_id: Mapped[UUID] = mapped_column(
+        ForeignKey("subcategories.id"), nullable=False
+    )
 
     subcategory: Mapped["Subcategory"] = relationship(
         init=False,
@@ -46,7 +57,9 @@ class Payment:
         back_populates="payments",
     )
 
-    source_institution_id: Mapped[UUID] = mapped_column(ForeignKey("institutions.id"), nullable=False)
+    source_institution_id: Mapped[UUID] = mapped_column(
+        ForeignKey("institutions.id"), nullable=False
+    )
 
     source_institution: Mapped["Institution"] = relationship(
         init=False,
@@ -68,7 +81,9 @@ class Payment:
         nullable=False,
     )
 
-    destination_institution_id: Mapped[UUID] = mapped_column(ForeignKey("institutions.id"), nullable=True)
+    destination_institution_id: Mapped[UUID] = mapped_column(
+        ForeignKey("institutions.id"), nullable=True
+    )
 
     destination_institution: Mapped["Institution | None"] = relationship(
         init=False,
@@ -83,6 +98,14 @@ class Payment:
         Numeric(12, 2),
         nullable=False,
         default=Decimal("0.00"),
+    )
+
+    transactions: Mapped[list["Transaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="receipt_payment",
     )
 
     # Auto-generated / server-managed — excluded from __init__

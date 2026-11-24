@@ -16,6 +16,7 @@ from app.models.account.enums import AccountTypeEnum
 if TYPE_CHECKING:
     from app.models import ScheduledTransaction, Transaction, TransactionSeries
 
+
 @table_registry.mapped_as_dataclass
 class Account:
     __tablename__ = "accounts"
@@ -34,7 +35,7 @@ class Account:
         nullable=False,
     )
 
-    account_number: Mapped[str | None] =mapped_column(
+    account_number: Mapped[str | None] = mapped_column(
         String,
         nullable=True,
     )

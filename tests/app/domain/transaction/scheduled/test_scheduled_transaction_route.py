@@ -32,8 +32,8 @@ def scheduled_route_service():
 def scheduled_client(scheduled_route_service, user):
     app = FastAPI()
     app.include_router(router, prefix="/transactions/scheduled")
-    app.dependency_overrides[scheduled_transaction_service] = (
-        lambda: scheduled_route_service
+    app.dependency_overrides[scheduled_transaction_service] = lambda: (
+        scheduled_route_service
     )
     app.dependency_overrides[get_current_user] = lambda: user
     with TestClient(app) as client:
@@ -104,9 +104,7 @@ def test_http_crud_scopes_transactions_to_series(
     assert page_filter.status == TransactionStatusEnum.PENDING
     assert service.list_all.await_args.kwargs["user"] is user
 
-    found = scheduled_client.get(
-        f"/transactions/scheduled/{series_id}/{scheduled_id}"
-    )
+    found = scheduled_client.get(f"/transactions/scheduled/{series_id}/{scheduled_id}")
     assert found.status_code == 200
     service.find_by.assert_awaited_once_with(
         filters={"id": scheduled_id, "transaction_series_id": series_id}, user=user
@@ -175,7 +173,12 @@ def test_invalid_input_never_calls_service(
     kwargs = {"json": body} if body is not None else {}
     assert getattr(scheduled_client, method)(path, **kwargs).status_code == 422
     for operation in (
-        "create", "list_all", "find_by", "update", "update_scheduled", "delete_scheduled"
+        "create",
+        "list_all",
+        "find_by",
+        "update",
+        "update_scheduled",
+        "delete_scheduled",
     ):
         getattr(scheduled_route_service, operation).assert_not_awaited()
 
@@ -184,9 +187,7 @@ def test_not_found_is_preserved(scheduled_client, scheduled_route_service):
     scheduled_route_service.find_by.side_effect = HTTPException(
         404, "ScheduledTransaction not found"
     )
-    response = scheduled_client.get(
-        f"/transactions/scheduled/{uuid4()}/{uuid4()}"
-    )
+    response = scheduled_client.get(f"/transactions/scheduled/{uuid4()}/{uuid4()}")
     assert response.status_code == 404
     assert response.json() == {"detail": "ScheduledTransaction not found"}
 
@@ -220,6 +221,11 @@ def test_authentication_required(method, scheduled_data):
     with TestClient(app) as client:
         assert getattr(client, method)(path, **kwargs).status_code in (401, 403)
     for operation in (
-        "create", "list_all", "find_by", "update", "update_scheduled", "delete_scheduled"
+        "create",
+        "list_all",
+        "find_by",
+        "update",
+        "update_scheduled",
+        "delete_scheduled",
     ):
         getattr(service, operation).assert_not_awaited()

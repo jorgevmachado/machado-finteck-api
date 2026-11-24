@@ -9,11 +9,13 @@ def normalize_name(value: str) -> str:
         raise ValueError("Name cannot be empty")
     return value
 
+
 def normalize_code(value: str) -> str:
     value = value.strip().upper()
     if re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{0,63}", value) is None:
         raise ValueError("Invalid institution code")
     return value
+
 
 def validate_pattern(value: str) -> re.Pattern[str]:
     if not value.strip():

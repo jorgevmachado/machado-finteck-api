@@ -84,7 +84,7 @@ def test_create_validates_and_delegates_complete_nested_payload(
 ):
     payload = {
         "name": "  Meu  Banco ",
-        "institution_code": " bank ",
+        "institution_id": str(uuid4()),
         "identification_rules": [{"pattern": "BANK", "weight": 1}],
         "field_rules": [rule_payload],
     }
@@ -99,11 +99,12 @@ def test_create_validates_and_delegates_complete_nested_payload(
 
 
 def test_list_filters_and_pagination_envelope(client, route_service, user, profile):
+    institution_id = uuid4()
     response = client.get(
         PREFIX,
         params={
             "name": " Meu  Banco ",
-            "institution_code": " bank ",
+            "institution_id": str(institution_id),
             "scope": "private",
             "offset": 2,
             "limit": 2,
@@ -113,7 +114,7 @@ def test_list_filters_and_pagination_envelope(client, route_service, user, profi
     args = route_service.list_profiles.await_args.kwargs
     assert args["user"] is user
     filters = args["page_filter"]
-    assert filters.name == "Meu Banco" and filters.institution_code == "BANK"
+    assert filters.name == "Meu Banco" and filters.institution_id == institution_id
     assert filters.scope == "private" and filters.offset == 2 and filters.limit == 2
     route_service.list_profiles.return_value = CustomLimitOffsetPage[
         ReceiptRulesSchema
@@ -236,7 +237,7 @@ def test_invalid_updates_are_rejected_before_service(
 )
 def test_create_rejects_managed_fields_and_shared_general(client, route_service, extra):
     response = client.post(
-        PREFIX, json={"name": "Bank", "institution_code": "BANK"} | extra
+        PREFIX, json={"name": "Bank", "institution_id": str(uuid4())} | extra
     )
     assert response.status_code == 422
     route_service.create_profile.assert_not_awaited()

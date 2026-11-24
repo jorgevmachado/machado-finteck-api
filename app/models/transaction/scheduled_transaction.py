@@ -31,7 +31,9 @@ class ScheduledTransaction:
         back_populates="scheduled_transactions",
     )
 
-    transaction_series_id: Mapped[UUID] = mapped_column(ForeignKey("transaction_series.id"), nullable=False)
+    transaction_series_id: Mapped[UUID] = mapped_column(
+        ForeignKey("transaction_series.id"), nullable=False
+    )
 
     transaction_serie: Mapped["TransactionSeries"] = relationship(
         init=False,
@@ -39,7 +41,9 @@ class ScheduledTransaction:
         back_populates="scheduled_transactions",
     )
 
-    subcategory_id: Mapped[UUID | None] = mapped_column(ForeignKey("subcategories.id"), nullable=True)
+    subcategory_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("subcategories.id"), nullable=True
+    )
 
     subcategory: Mapped["Subcategory | None"] = relationship(
         init=False,
@@ -47,7 +51,9 @@ class ScheduledTransaction:
         back_populates="scheduled_transactions",
     )
 
-    credit_card_id: Mapped[UUID | None] = mapped_column(ForeignKey("credit_cards.id"), nullable=True)
+    credit_card_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("credit_cards.id"), nullable=True
+    )
 
     credit_card: Mapped["CreditCard | None"] = relationship(
         init=False,
@@ -57,9 +63,9 @@ class ScheduledTransaction:
 
     name: Mapped[str] = mapped_column(String, nullable=False)
 
-
     direction: Mapped[TransactionDirectionEnum] = mapped_column(
-        SAEnum(TransactionDirectionEnum, name="transactiondirectionenum"), nullable=False
+        SAEnum(TransactionDirectionEnum, name="transactiondirectionenum"),
+        nullable=False,
     )
 
     status: Mapped[TransactionStatusEnum] = mapped_column(

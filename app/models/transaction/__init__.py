@@ -15,5 +15,5 @@ __all__ = [
     "TransactionFrequencyUnitEnum",
     "Transaction",
     "TransactionSeries",
-    "ScheduledTransaction"
+    "ScheduledTransaction",
 ]

@@ -1,7 +1,7 @@
 [
   {
     "name": "Default",
-    "institution_code": null,
+    "institution_name": null,
     "identification_rules": [],
     "field_rules": [
       {
@@ -251,7 +251,7 @@
   },
   {
     "name": "Nubank",
-    "institution_code": "NUBANK",
+    "institution_name": "Nu Pagamentos",
     "identification_rules": [
       {
         "pattern": "\\bNU\\s+PAGAMENTOS\\b",
@@ -309,7 +309,7 @@
   },
   {
     "name": "Itaú",
-    "institution_code": "ITAU",
+    "institution_name": "Itaú Unibanco",
     "identification_rules": [
       {
         "pattern": "\\bITA[ÚU]\\s+UNIBANCO\\b",
@@ -358,7 +358,7 @@
   },
   {
     "name": "Caixa",
-    "institution_code": "CAIXA",
+    "institution_name": "Caixa Econômica Federal",
     "identification_rules": [
       {
         "pattern": "\\bCAIXA\\s+ECON[ÔO]MICA\\s+FEDERAL\\b",

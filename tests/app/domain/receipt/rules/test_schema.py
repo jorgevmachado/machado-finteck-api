@@ -23,11 +23,12 @@ from app.models import ReceiptFieldRule, utcnow
 
 
 def test_create_normalizes_identity_and_preserves_omission_defaults():
+    institution_id = uuid4()
     result = ReceiptRulesCreateSchema(
-        name="  Meu  Banco  ", institution_code=" bank-1 "
+        name="  Meu  Banco  ", institution_id=institution_id
     )
     assert result.name == "Meu Banco"
-    assert result.institution_code == "BANK-1"
+    assert result.institution_id == institution_id
     assert result.is_active
     assert result.field_rules == result.identification_rules == []
 
@@ -37,11 +38,10 @@ def test_create_normalizes_identity_and_preserves_omission_defaults():
     [
         {"name": " "},
         {"name": None},
-        {"institution_code": None},
-        {"institution_code": ""},
-        {"institution_code": "BAN CO"},
-        {"institution_code": "-BANK"},
-        {"institution_code": "A" * 65},
+        {"institution_id": None},
+        {"institution_id": ""},
+        {"institution_id": "not-a-uuid"},
+        {"institution_code": "BANK"},
         {"user_id": str(uuid4())},
         {"id": str(uuid4())},
         {"is_active": "true"},
@@ -59,7 +59,7 @@ def test_create_normalizes_identity_and_preserves_omission_defaults():
 def test_create_rejects_invalid_identity_managed_fields_and_limits(patch):
     with pytest.raises(ValidationError):
         ReceiptRulesCreateSchema.model_validate(
-            {"name": "Bank", "institution_code": "BANK"} | patch
+            {"name": "Bank", "institution_id": str(uuid4())} | patch
         )
 
 
@@ -67,7 +67,7 @@ def test_create_rejects_duplicate_fields_even_if_inactive(rule_payload):
     with pytest.raises(ValidationError, match="unique"):
         ReceiptRulesCreateSchema(
             name="Bank",
-            institution_code="BANK",
+            institution_id=uuid4(),
             field_rules=[rule_payload, rule_payload | {"is_active": False}],
         )
 
@@ -182,7 +182,7 @@ def test_update_omission_null_managed_identity_and_child_ids(rule_payload):
     for field in ("name", "is_active", "field_rules", "identification_rules"):
         with pytest.raises(ValidationError):
             ReceiptRulesUpdateSchema.model_validate({field: None})
-    for field in ("institution_code", "user_id", "id"):
+    for field in ("institution_id", "institution_code", "user_id", "id"):
         with pytest.raises(ValidationError):
             ReceiptRulesUpdateSchema.model_validate({field: str(uuid4())})
     for schema, payload in (
@@ -215,6 +215,7 @@ def test_response_derives_scope_filters_deleted_children_and_orders(
     assert "profile_id" not in serialized["field_rules"][0]
     assert ReceiptRulesSchema.model_validate(serialized) == response
     profile.user_id = None
+    profile.institution_id = None
     profile.institution_code = None
     assert ReceiptRulesSchema.model_validate(profile).scope == "system"
 

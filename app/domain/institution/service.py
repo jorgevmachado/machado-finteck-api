@@ -5,6 +5,7 @@ from http import HTTPStatus
 from uuid import UUID
 
 from fastapi import HTTPException
+from sqlalchemy import update
 
 from app.core.logging import LoggingParams
 from app.domain.institution.repository import InstitutionRepository
@@ -15,7 +16,7 @@ from app.domain.institution.schema import (
     InstitutionSeedSchema,
 )
 from app.domain.institution.seeds import load_seeds_institutions
-from app.models import Institution, User
+from app.models import Institution, ReceiptInterpretationProfile, User, utcnow
 from app.shared.utils.string import to_snake_case
 from app.core.service import BaseService
 
@@ -69,17 +70,46 @@ class InstitutionService(
                     status_code=HTTPStatus.CONFLICT,
                     detail="Institution already exists",
                 )
+            if entity_id is not None:
+                await self._resync_profile_codes(entity_id, data["name_code"])
         return data
+
+    async def _resync_profile_codes(self, institution_id: UUID, name_code: str) -> None:
+        """Perfis guardam `institution_code` como snapshot de `name_code`."""
+        code = name_code.upper()
+        await self.repository.session.execute(
+            update(ReceiptInterpretationProfile)
+            .where(
+                ReceiptInterpretationProfile.institution_id == institution_id,
+                ReceiptInterpretationProfile.institution_code != code,
+            )
+            .values(institution_code=code, updated_at=utcnow())
+        )
 
     async def resolve(self, user: User, name: str) -> Institution:
         async with self._operation("resolve", user.username):
-            payload = InstitutionCreateSchema(name=name)
-            entity = await self._find(
-                user_id=user.id,
-                filters={"name_code": to_snake_case(payload.name)},
-                required=False,
-            )
-            return entity if entity is not None else await self._create(user, payload)
+            async with self.repository.transaction():
+                return await self.resolve_in_transaction(user, name)
+
+    async def resolve_in_transaction(self, user: User, name: str) -> Institution:
+        """Idempotente por `name_code`. Exige transação já aberta pelo chamador.
+
+        Usado pelo seed de regras, que precisa resolver instituições dentro da
+        própria transação (aninhar transações não é suportado pelo repositório).
+        """
+        payload = InstitutionCreateSchema(name=name)
+        name_code = to_snake_case(payload.name)
+        entity = await self._find(
+            user_id=user.id,
+            filters={"name_code": name_code},
+            required=False,
+        )
+        if entity is not None:
+            return entity
+        entity = self._build_entity(
+            user.id, {"name": payload.name, "name_code": name_code}
+        )
+        return await self.repository.save(entity, user_id=user.id)
 
     async def seed_defaults(self, user: User) -> InstitutionSeedSchema:
         async with self._operation("seed_defaults", user.username):

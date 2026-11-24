@@ -10,6 +10,7 @@ from app.domain.receipt.data.enums import DataStatusEnum
 
 T = TypeVar("T")
 
+
 class DataField(BaseModel, Generic[T]):
     value: T | None = None
     status: DataStatusEnum
@@ -34,6 +35,7 @@ class ReceiptData(BaseModel):
     document_amount: DataField[Decimal]
     source_institution: DataField[str]
     destination_institution: DataField[str]
+
 
 class ReceiptDataError(BaseModel):
     field: str
