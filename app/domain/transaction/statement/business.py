@@ -1,7 +1,7 @@
 from calendar import monthrange
 from collections.abc import Iterable
 from datetime import date, timedelta
-from typing import TypedDict
+from typing import Protocol, TypedDict
 from uuid import UUID
 
 from app.domain.transaction.statement.schema import (
@@ -16,6 +16,23 @@ from app.models import (
 )
 
 
+class _Schedule(Protocol):
+    """The schedule fields every projection calculation depends on.
+
+    Both `StatementSeriesSchema` and the ORM `TransactionSeries` satisfy it, so
+    the same arithmetic serves the statement and the confirmation.
+    """
+
+    start_date: date
+    frequency_unit: TransactionFrequencyUnitEnum
+    frequency_interval: int
+    week_day: int | None
+    day_of_month: int | None
+    month: int | None
+    installments: int | None
+    kind: TransactionKindEnum
+
+
 def _month_date(year: int, month: int, day: int) -> date:
     return date(year, month, min(day, monthrange(year, month)[1]))
 
@@ -27,7 +44,7 @@ def _month_at(anchor: date, months: int, day: int) -> date | None:
     return _month_date(year + 1, month + 1, day)
 
 
-def _first_occurrence(series: StatementSeriesSchema) -> date | None:
+def _first_occurrence(series: _Schedule) -> date | None:
     start = series.start_date
     unit = series.frequency_unit
     if unit == TransactionFrequencyUnitEnum.WEEK:
@@ -47,9 +64,7 @@ def _first_occurrence(series: StatementSeriesSchema) -> date | None:
     return _month_date(start.year + 1, series.month or start.month, day)
 
 
-def _occurrence_at(
-    series: StatementSeriesSchema, first: date, offset: int
-) -> date | None:
+def _occurrence_at(series: _Schedule, first: date, offset: int) -> date | None:
     interval = series.frequency_interval
     if series.frequency_unit == TransactionFrequencyUnitEnum.WEEK:
         days = offset * interval * 7
@@ -64,6 +79,60 @@ class _FlatCategory(TypedDict):
     subcategory_name: str | None
     category_id: UUID | None
     category_name: str | None
+
+
+def shift_occurrences_back(
+    target: date,
+    *,
+    steps: int,
+    unit: TransactionFrequencyUnitEnum,
+    interval: int,
+) -> date:
+    """Walk `steps` occurrences backwards from `target`, using the same calendar
+    arithmetic as the projection. Used to derive a series start date from the
+    position of the installment a receipt represents.
+    """
+    if steps <= 0:
+        return target
+    if unit == TransactionFrequencyUnitEnum.WEEK:
+        return target - timedelta(days=steps * interval * 7)
+    months = steps * interval * (12 if unit == TransactionFrequencyUnitEnum.YEAR else 1)
+    shifted = _month_at(target, -months, target.day)
+    if shifted is None:
+        raise ValueError("Series start date is out of range")
+    return shifted
+
+
+def occurrence_index_at(series: _Schedule, target: date) -> int | None:
+    """1-based index of the occurrence that falls on `target`, if any.
+
+    Reuses the projection arithmetic, so the index a confirmation writes is the
+    same one `project_series` would generate for that date. Returns None when the
+    date is not an occurrence of the series (wrong day, wrong interval, or past
+    the end of a closed plan).
+    """
+    first = _first_occurrence(series)
+    if first is None or target < first:
+        return None
+    step_days = series.frequency_interval * 7
+    step_months = series.frequency_interval * (
+        12 if series.frequency_unit == TransactionFrequencyUnitEnum.YEAR else 1
+    )
+    if series.frequency_unit == TransactionFrequencyUnitEnum.WEEK:
+        distance, step = (target - first).days, step_days
+    else:
+        distance = (target.year - first.year) * 12 + target.month - first.month
+        step = step_months
+    if distance % step:
+        return None
+    index = distance // step + 1
+    if _occurrence_at(series, first, index - 1) != target:
+        return None
+    if series.kind == TransactionKindEnum.CLOSED and (
+        series.installments is None or index > series.installments
+    ):
+        return None
+    return index
 
 
 def _flat_subcategory(series: StatementSeriesSchema) -> _FlatCategory:

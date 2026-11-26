@@ -293,15 +293,26 @@ class BaseService[
         async with self._operation("create", user.username):
             return await self._create(user, payload)
 
+    async def add_owned(self, user: User, payload: CreateT) -> ModelT:
+        """Persist a new owned entity without opening its own transaction.
+
+        Composition entry point for callers that already hold an open
+        `repository.transaction()` — such as the receipt confirmation, which
+        writes several entities atomically. `_create` delegates here, so both
+        paths share validation, normalization and entity building. Callers are
+        responsible for cache invalidation after their own commit.
+        """
+        self.repository.require_owner(user.id)
+        data = await self._prepare_create(
+            self._write_data(payload, partial=False), user
+        )
+        return await self.repository.save(
+            self._build_entity(user.id, data), user_id=user.id
+        )
+
     async def _create(self, user: User, payload: CreateT) -> ModelT:
         async with self.repository.transaction():
-            self.repository.require_owner(user.id)
-            data = await self._prepare_create(
-                self._write_data(payload, partial=False), user
-            )
-            result = await self.repository.save(
-                self._build_entity(user.id, data), user_id=user.id
-            )
+            result = await self.add_owned(user, payload)
         await self._invalidate_cache(user, result, "create")
         return result
 

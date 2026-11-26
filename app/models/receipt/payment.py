@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         Subcategory,
         Institution,
         Payer,
+        ScheduledTransaction,
         Transaction,
     )
 
@@ -101,6 +102,14 @@ class Payment:
     )
 
     transactions: Mapped[list["Transaction"]] = relationship(
+        lazy=default_lazy,
+        default_factory=list,
+        init=False,
+        repr=False,
+        back_populates="receipt_payment",
+    )
+
+    scheduled_transactions: Mapped[list["ScheduledTransaction"]] = relationship(
         lazy=default_lazy,
         default_factory=list,
         init=False,

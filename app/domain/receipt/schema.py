@@ -1,12 +1,17 @@
 from datetime import datetime, date
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.domain.receipt.data.schema import ReceiptData, ReceiptDataError
 from app.domain.receipt.interpretation.schema import InterpretationResult
-from app.models import ReceiptStatusEnum
+from app.models import (
+    ReceiptStatusEnum,
+    TransactionDirectionEnum,
+    TransactionFrequencyUnitEnum,
+)
 from app.shared.utils.string import text_strip
 
 
@@ -52,7 +57,9 @@ class BatchReceiptSchema(BaseModel):
     processing: int
 
 
-class ReceiptConfirmSchema(BaseModel):
+class ReceiptUpdateSchema(BaseModel):
+    """Receipt fields edited on their own, before any confirmation."""
+
     payer: str
     beneficiary: str
     paid_amount: Decimal
@@ -81,3 +88,75 @@ class ReceiptConfirmSchema(BaseModel):
         if not value:
             raise ValueError("Field cannot be empty")
         return value
+
+
+class ReceiptConfirmSchema(ReceiptUpdateSchema):
+    """Confirmation payload: receipt fields plus the financial entry to create."""
+
+    name: str
+    account_id: UUID
+    direction: TransactionDirectionEnum = TransactionDirectionEnum.OUT
+    expected_on: date | None = None
+    credit_card_id: UUID | None = None
+    note: str | None = None
+    overwrite: bool = False
+
+    transaction_kind: Literal["SIMPLE", "INSTALLMENT", "RECURRING"] = "SIMPLE"
+    installment_index: int | None = None
+    installments_total: int | None = None
+    frequency_unit: TransactionFrequencyUnitEnum | None = None
+    frequency_interval: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = text_strip(value)
+        if not value:
+            raise ValueError("Field cannot be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_transaction_kind(self) -> "ReceiptConfirmSchema":
+        installment_fields = (self.installment_index, self.installments_total)
+        frequency_fields = (self.frequency_unit, self.frequency_interval)
+
+        if self.transaction_kind == "INSTALLMENT":
+            if any(field is None for field in installment_fields):
+                raise ValueError(
+                    "installment_index and installments_total are required "
+                    "for INSTALLMENT"
+                )
+            if any(field is not None for field in frequency_fields):
+                raise ValueError(
+                    "frequency_unit and frequency_interval are not allowed "
+                    "for INSTALLMENT"
+                )
+            assert self.installment_index is not None
+            assert self.installments_total is not None
+            if self.installment_index < 1:
+                raise ValueError("installment_index must be at least 1")
+            if self.installments_total < self.installment_index:
+                raise ValueError(
+                    "installments_total must be greater than or equal to "
+                    "installment_index"
+                )
+            return self
+
+        if self.transaction_kind == "RECURRING":
+            if any(field is None for field in frequency_fields):
+                raise ValueError(
+                    "frequency_unit and frequency_interval are required for RECURRING"
+                )
+            if any(field is not None for field in installment_fields):
+                raise ValueError(
+                    "installment_index and installments_total are not allowed "
+                    "for RECURRING"
+                )
+            assert self.frequency_interval is not None
+            if self.frequency_interval < 1:
+                raise ValueError("frequency_interval must be at least 1")
+            return self
+
+        if any(field is not None for field in (*installment_fields, *frequency_fields)):
+            raise ValueError("SIMPLE does not accept installment or frequency fields")
+        return self

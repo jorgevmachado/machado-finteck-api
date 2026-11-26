@@ -19,7 +19,7 @@ from app.domain.receipt.route import (
     upload_receipt,
     upload_batch,
 )
-from app.domain.receipt.payment.schema import PaymentSchema
+from app.domain.receipt.confirm_schema import ReceiptConfirmOutcome
 from app.domain.receipt.schema import ReceiptSchema
 from app.domain.receipt.service import ReceiptService
 from app.models import ReceiptStatusEnum, utcnow
@@ -195,24 +195,46 @@ def test_read_routes_require_authentication(service, path):
     service.find_one.assert_not_awaited()
 
 
-def test_confirm_route_delegates_payload_and_returns_the_payment(
+def test_confirm_route_delegates_payload_and_returns_the_envelope(
     receipt_client, service, user, confirm_payload, payment
 ):
     receipt_id = uuid4()
-    service.confirm.return_value = payment
+    service.confirm.return_value = ReceiptConfirmOutcome(payment=payment)
 
     response = receipt_client.post(
         f"/receipts/{receipt_id}/confirm", json=confirm_payload.model_dump(mode="json")
     )
 
     assert response.status_code == 200
-    assert response.json() == PaymentSchema.model_validate(payment).model_dump(
-        mode="json"
-    )
-    assert response.json()["id"] == str(payment.id)
+    body = response.json()
+    assert body["payment"]["id"] == str(payment.id)
+    assert body["transaction"] is None
+    assert body["series"] is None
+    assert body["occurrence"] is None
     service.confirm.assert_awaited_once_with(
         receipt_id=receipt_id, user=user, payload=confirm_payload
     )
+
+
+def test_confirm_route_returns_409_with_the_conflict_body(
+    receipt_client, service, confirm_payload
+):
+    service.confirm.side_effect = HTTPException(
+        status_code=409,
+        detail={
+            "type": "OCCURRENCE_EXISTS",
+            "existing": {"id": "abc", "settled_on": "2026-10-26", "value": "55.90"},
+            "occurrence": {"occurrence_index": 3},
+        },
+    )
+
+    response = receipt_client.post(
+        f"/receipts/{uuid4()}/confirm", json=confirm_payload.model_dump(mode="json")
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["type"] == "OCCURRENCE_EXISTS"
+    assert response.json()["detail"]["existing"]["value"] == "55.90"
 
 
 @pytest.mark.parametrize("status", [404, 409, 500])
@@ -257,29 +279,29 @@ def test_confirm_route_requires_authentication(service, confirm_payload):
 
 
 def test_update_receipt_route_delegates_payload_and_returns_receipt(
-    receipt_client, service, receipt, user, confirm_payload
+    receipt_client, service, receipt, user, update_payload
 ):
     service.update_receipt.return_value = receipt
 
     response = receipt_client.put(
-        f"/receipts/{receipt.id}", json=confirm_payload.model_dump(mode="json")
+        f"/receipts/{receipt.id}", json=update_payload.model_dump(mode="json")
     )
 
     assert response.status_code == 200
     assert response.json() == receipt.model_dump(mode="json")
     service.update_receipt.assert_awaited_once_with(
-        receipt_id=receipt.id, user=user, payload=confirm_payload
+        receipt_id=receipt.id, user=user, payload=update_payload
     )
 
 
 @pytest.mark.parametrize("status", [404, 409, 500])
 def test_update_receipt_route_preserves_service_errors(
-    receipt_client, service, confirm_payload, status
+    receipt_client, service, update_payload, status
 ):
     service.update_receipt.side_effect = HTTPException(status, "Update failed")
 
     response = receipt_client.put(
-        f"/receipts/{uuid4()}", json=confirm_payload.model_dump(mode="json")
+        f"/receipts/{uuid4()}", json=update_payload.model_dump(mode="json")
     )
 
     assert response.status_code == status
@@ -288,10 +310,10 @@ def test_update_receipt_route_preserves_service_errors(
 
 @pytest.mark.parametrize("invalid", ["id", "payload"])
 def test_update_receipt_route_rejects_invalid_input(
-    receipt_client, service, confirm_payload, invalid
+    receipt_client, service, update_payload, invalid
 ):
     receipt_id = "not-a-uuid" if invalid == "id" else str(uuid4())
-    payload = {} if invalid == "payload" else confirm_payload.model_dump(mode="json")
+    payload = {} if invalid == "payload" else update_payload.model_dump(mode="json")
 
     response = receipt_client.put(f"/receipts/{receipt_id}", json=payload)
 
@@ -299,14 +321,14 @@ def test_update_receipt_route_rejects_invalid_input(
     service.update_receipt.assert_not_awaited()
 
 
-def test_update_receipt_route_requires_authentication(service, confirm_payload):
+def test_update_receipt_route_requires_authentication(service, update_payload):
     app = FastAPI()
     app.include_router(router, prefix="/receipts")
     app.dependency_overrides[receipt_service] = lambda: service
 
     with TestClient(app) as client:
         response = client.put(
-            f"/receipts/{uuid4()}", json=confirm_payload.model_dump(mode="json")
+            f"/receipts/{uuid4()}", json=update_payload.model_dump(mode="json")
         )
 
     assert response.status_code in (401, 403)
@@ -314,7 +336,7 @@ def test_update_receipt_route_requires_authentication(service, confirm_payload):
 
 
 def test_update_receipt_route_rejects_response_that_is_not_a_receipt(
-    receipt_client, service, confirm_payload
+    receipt_client, service, update_payload
 ):
     service.update_receipt.return_value = Message(
         message="Receipt updated successfully"
@@ -322,14 +344,14 @@ def test_update_receipt_route_rejects_response_that_is_not_a_receipt(
 
     with pytest.raises(ResponseValidationError):
         receipt_client.put(
-            f"/receipts/{uuid4()}", json=confirm_payload.model_dump(mode="json")
+            f"/receipts/{uuid4()}", json=update_payload.model_dump(mode="json")
         )
 
 
 def test_update_receipt_route_rejects_blank_required_text(
-    receipt_client, service, confirm_payload
+    receipt_client, service, update_payload
 ):
-    payload = {**confirm_payload.model_dump(mode="json"), "beneficiary": "   "}
+    payload = {**update_payload.model_dump(mode="json"), "beneficiary": "   "}
 
     response = receipt_client.put(f"/receipts/{uuid4()}", json=payload)
 
@@ -338,11 +360,11 @@ def test_update_receipt_route_rejects_blank_required_text(
 
 
 def test_update_receipt_route_accepts_and_strips_category(
-    receipt_client, service, receipt, confirm_payload
+    receipt_client, service, receipt, update_payload
 ):
     service.update_receipt.return_value = receipt
     payload = {
-        **confirm_payload.model_dump(mode="json"),
+        **update_payload.model_dump(mode="json"),
         "category": "  Utilities  ",
     }
 
@@ -351,3 +373,20 @@ def test_update_receipt_route_accepts_and_strips_category(
     assert response.status_code == 200
     sent = service.update_receipt.await_args.kwargs["payload"]
     assert sent.category == "  Utilities  "
+
+
+def test_confirm_route_documents_the_envelope_and_the_409_body():
+    app = FastAPI()
+    app.include_router(router, prefix="/receipts")
+
+    schema = app.openapi()["paths"]["/receipts/{receipt_id}/confirm"]["post"]
+
+    success = schema["responses"]["200"]["content"]["application/json"]["schema"]
+    assert success["$ref"].endswith("/ReceiptConfirmResultSchema")
+    conflict = schema["responses"]["409"]["content"]["application/json"]["schema"]
+    assert conflict["$ref"].endswith("/ReceiptConfirmConflictSchema")
+    properties = app.openapi()["components"]["schemas"]["ReceiptConfirmResultSchema"][
+        "properties"
+    ]
+    assert set(properties) == {"payment", "transaction", "series", "occurrence"}
+    assert properties["transaction"]["anyOf"][1]["type"] == "null"

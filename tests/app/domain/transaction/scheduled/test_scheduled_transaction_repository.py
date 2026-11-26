@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import uuid4
 
 import pytest
@@ -38,6 +39,7 @@ async def test_lookup_scopes_owner_and_loads_related_resources(
         "subcategory",
         "credit_card",
         "transaction_serie",
+        "receipt_payment",
     }
 
 
@@ -50,6 +52,8 @@ async def test_lookup_scopes_owner_and_loads_related_resources(
         ("transaction_series_id", uuid4()),
         ("direction", "OUT"),
         ("status", TransactionStatusEnum.SETTLED),
+        ("occurrence_index", 3),
+        ("occurrence_on", date(2027, 1, 10)),
     ],
 )
 async def test_pagination_and_count_share_owner_and_filters(
@@ -72,6 +76,30 @@ async def test_pagination_and_count_share_owner_and_filters(
         assert value in compiled.params.values()
     assert page.meta.total == 1
     assert filters.model_dump() == before
+
+
+async def test_lookup_by_series_and_occurrence_index_returns_the_override(
+    transaction_session, scheduled_entity, user
+):
+    transaction_session.scalars.return_value.unique.return_value.one_or_none.return_value = scheduled_entity
+
+    result = await ScheduledTransactionRepository(transaction_session).find_by(
+        user_id=user.id,
+        filters={
+            "transaction_series_id": str(scheduled_entity.transaction_series_id),
+            "occurrence_index": scheduled_entity.occurrence_index,
+        },
+    )
+
+    assert result is scheduled_entity
+    compiled = transaction_session.scalars.await_args.args[0].compile(
+        dialect=postgresql.dialect()
+    )
+    assert "scheduled_transactions.transaction_series_id =" in str(compiled)
+    assert "scheduled_transactions.occurrence_index =" in str(compiled)
+    assert "scheduled_transactions.user_id =" in str(compiled)
+    assert scheduled_entity.occurrence_index in compiled.params.values()
+    assert user.id in compiled.params.values()
 
 
 @pytest.mark.parametrize("filters", [{"user_id": uuid4()}, {"unknown": "value"}])

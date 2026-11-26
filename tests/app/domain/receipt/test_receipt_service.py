@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from io import BytesIO
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -413,6 +415,9 @@ async def test_validate_confirm_receipt_requires_received_status(
 def confirmation_service(service, receipt):
     service.repository.find_by.return_value = receipt
     service.payment_service = AsyncMock()
+    service.payment_service.add_owned.side_effect = lambda user, payload: (
+        SimpleNamespace(id=uuid4(), **payload.model_dump())
+    )
     for name in ("payer_service", "beneficiary_service", "institution_service"):
         dependency = AsyncMock()
         dependency.resolve.return_value = SimpleNamespace(id=uuid4())
@@ -421,11 +426,57 @@ def confirmation_service(service, receipt):
     service.category_service.find_subcategory_by_id.return_value = SimpleNamespace(
         id=uuid4()
     )
+    service.transaction_service = AsyncMock()
+    service.transaction_service.add_owned.side_effect = lambda user, payload: (
+        SimpleNamespace(id=uuid4(), **payload.model_dump())
+    )
+    service.series_service = AsyncMock()
+    service.series_service.resolve_open_series.return_value = None
+    service.series_service.add_owned.side_effect = lambda user, payload: (
+        SimpleNamespace(id=uuid4(), **payload.model_dump())
+    )
+    service.scheduled_service = AsyncMock()
+    service.scheduled_service.find_by.return_value = None
+    service.scheduled_service.add_owned.side_effect = lambda user, payload: (
+        SimpleNamespace(id=uuid4(), **payload.model_dump())
+    )
     return service
 
 
+async def test_confirm_simple_writes_payment_and_transaction_in_one_transaction(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    service.payment_service.check_receipt.assert_awaited if False else None
+    events = []
+    original_save = service.repository.save
+
+    service.repository.save = AsyncMock(
+        side_effect=lambda **kwargs: events.append("receipt") or kwargs["entity"]
+    )
+    service.transaction_service.add_owned.side_effect = lambda user, payload: (
+        events.append("transaction")
+        or SimpleNamespace(id=uuid4(), **payload.model_dump())
+    )
+    service.payment_service.add_owned.side_effect = lambda user, payload: (
+        events.append("payment") or SimpleNamespace(id=uuid4(), **payload.model_dump())
+    )
+
+    result = await service.confirm(receipt.id, user, confirm_payload)
+
+    assert events == ["payment", "transaction", "receipt"]
+    assert receipt.status == ReceiptStatusEnum.PROCESSED
+    assert result.transaction is not None
+    assert result.series is None and result.occurrence is None
+    transaction_payload = service.transaction_service.add_owned.await_args.args[1]
+    assert transaction_payload.receipt_payment_id == result.payment.id
+    assert transaction_payload.status == "SETTLED"
+    assert transaction_payload.settled_on == confirm_payload.payment_date
+    assert original_save is not None
+
+
 @pytest.mark.parametrize("has_destination", [False, True])
-async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
+async def test_confirm_resolves_receipt_entities_before_writing(
     confirmation_service, receipt, user, confirm_payload, has_destination
 ):
     service = confirmation_service
@@ -435,19 +486,9 @@ async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
     source = SimpleNamespace(id=uuid4())
     destination = SimpleNamespace(id=uuid4())
     service.institution_service.resolve.side_effect = [source, destination]
-    payment = SimpleNamespace(id=uuid4(), receipt=None)
 
-    async def create_payment(**kwargs):
-        assert receipt.status == ReceiptStatusEnum.RECEIVED
-        service.repository.save.assert_not_awaited()
-        return payment
+    await service.confirm(receipt.id, user, confirm_payload)
 
-    service.payment_service.create_payment.side_effect = create_payment
-
-    result = await service.confirm(receipt.id, user, confirm_payload)
-
-    assert result is payment
-    assert payment.receipt is receipt
     service.payment_service.check_receipt.assert_awaited_once_with(receipt.id, user)
     service.payer_service.resolve.assert_awaited_once_with(
         user=user, name=confirm_payload.payer
@@ -466,67 +507,141 @@ async def test_confirm_resolves_entities_creates_payment_then_marks_processed(
             else []
         ),
     ]
-    service.payment_service.create_payment.assert_awaited_once_with(
-        user=user,
-        payer_id=service.payer_service.resolve.return_value.id,
-        receipt_id=receipt.id,
-        amount=confirm_payload.paid_amount,
-        payment_date=confirm_payload.payment_date,
-        beneficiary_id=service.beneficiary_service.resolve.return_value.id,
-        subcategory_id=service.category_service.find_subcategory_by_id.return_value.id,
-        source_institution_id=source.id,
-        description=confirm_payload.description,
-        destination_institution_id=destination.id if has_destination else None,
+    payment_payload = service.payment_service.add_owned.await_args.args[1]
+    assert payment_payload.payer_id == service.payer_service.resolve.return_value.id
+    assert payment_payload.receipt_id == receipt.id
+    assert payment_payload.amount == confirm_payload.paid_amount
+    assert payment_payload.destination_institution_id == (
+        destination.id if has_destination else None
     )
-    assert receipt.status == ReceiptStatusEnum.PROCESSED
-    service.repository.save.assert_awaited_once_with(entity=receipt, user_id=user.id)
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        "missing",
-        "status",
-        "duplicate",
-        "payer",
-        "beneficiary",
-        "source",
-        "subcategory",
-        "destination",
-        "create",
-        "save",
-    ],
-)
-async def test_confirm_propagates_failures_without_reporting_success(
-    confirmation_service, receipt, user, confirm_payload, failure
+async def test_confirm_recurring_reuses_the_open_series_and_writes_an_occurrence(
+    confirmation_service, receipt, user, confirm_payload
 ):
     service = confirmation_service
-    expected_status = 500
-    exception = RuntimeError("database failure")
-    if failure == "missing":
-        service.repository.find_by.return_value = None
-        expected_status = 404
-    elif failure == "status":
-        receipt.status = ReceiptStatusEnum.FAILED
-        expected_status = 409
-    else:
-        dependencies = {
-            "duplicate": service.payment_service.check_receipt,
-            "payer": service.payer_service.resolve,
-            "beneficiary": service.beneficiary_service.resolve,
-            "source": service.institution_service.resolve,
-            "subcategory": service.category_service.find_subcategory_by_id,
-            "destination": service.institution_service.resolve,
-            "create": service.payment_service.create_payment,
-            "save": service.repository.save,
-        }
-        if failure == "duplicate":
-            exception = HTTPException(409, "Receipt already has a payment")
-            expected_status = 409
-        if failure == "destination":
-            dependencies[failure].side_effect = [SimpleNamespace(id=uuid4()), exception]
-        else:
-            dependencies[failure].side_effect = exception
+    confirm_payload.transaction_kind = "RECURRING"
+    confirm_payload.frequency_unit = "MONTH"
+    confirm_payload.frequency_interval = 1
+    existing_series = SimpleNamespace(
+        id=uuid4(),
+        name=confirm_payload.name,
+        start_date=date(2026, 8, 26),
+        frequency_unit="MONTH",
+        frequency_interval=1,
+        week_day=None,
+        day_of_month=26,
+        month=None,
+        installments=None,
+        kind="OPEN",
+    )
+    service.series_service.resolve_open_series.return_value = existing_series
+
+    result = await service.confirm(receipt.id, user, confirm_payload)
+
+    service.series_service.resolve_open_series.assert_awaited_once_with(
+        user=user,
+        name=confirm_payload.name,
+        account_id=confirm_payload.account_id,
+        direction=confirm_payload.direction,
+    )
+    service.series_service.add_owned.assert_not_awaited()
+    occurrence_payload = service.scheduled_service.add_owned.await_args.args[1]
+    assert occurrence_payload.transaction_series_id == existing_series.id
+    # Series starts 2026-08-26 and the payment is 2026-10-26: the paid month is
+    # the third occurrence, not the first.
+    assert occurrence_payload.occurrence_index == 3
+    assert occurrence_payload.status == "SETTLED"
+    assert occurrence_payload.receipt_payment_id == result.payment.id
+    assert result.series is not None and result.occurrence is not None
+    assert result.transaction is None
+
+
+async def test_confirm_recurring_creates_the_series_when_none_matches(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    confirm_payload.transaction_kind = "RECURRING"
+    confirm_payload.frequency_unit = "MONTH"
+    confirm_payload.frequency_interval = 1
+
+    await service.confirm(receipt.id, user, confirm_payload)
+
+    series_payload = service.series_service.add_owned.await_args.args[1]
+    assert series_payload.kind == "OPEN"
+    assert series_payload.start_date == confirm_payload.payment_date
+    assert series_payload.frequency_unit == "MONTH"
+
+
+async def test_confirm_installment_derives_start_date_from_the_position(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    confirm_payload.transaction_kind = "INSTALLMENT"
+    confirm_payload.installment_index = 3
+    confirm_payload.installments_total = 10
+    confirm_payload.payment_date = date(2025, 11, 13)
+
+    await service.confirm(receipt.id, user, confirm_payload)
+
+    series_payload = service.series_service.add_owned.await_args.args[1]
+    assert series_payload.kind == "CLOSED"
+    assert series_payload.installments == 10
+    assert series_payload.start_date == date(2025, 9, 13)
+    occurrence_payload = service.scheduled_service.add_owned.await_args.args[1]
+    assert occurrence_payload.occurrence_index == 3
+    assert occurrence_payload.occurrence_on == date(2025, 11, 13)
+
+
+async def test_confirm_refuses_a_settled_occurrence_without_consent(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    confirm_payload.transaction_kind = "RECURRING"
+    confirm_payload.frequency_unit = "MONTH"
+    confirm_payload.frequency_interval = 1
+    service.scheduled_service.find_by.return_value = SimpleNamespace(
+        id=uuid4(), settled_on=date(2025, 11, 13), value=Decimal("55.90")
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await service.confirm(receipt.id, user, confirm_payload)
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["type"] == "OCCURRENCE_EXISTS"
+    assert caught.value.detail["existing"]["value"] == "55.90"
+    service.scheduled_service.add_owned.assert_not_awaited()
+    service.scheduled_service.delete_occurrence.assert_not_awaited()
+    service.repository.save.assert_not_awaited()
+
+
+async def test_confirm_overwrites_the_occurrence_when_consented(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    confirm_payload.transaction_kind = "RECURRING"
+    confirm_payload.frequency_unit = "MONTH"
+    confirm_payload.frequency_interval = 1
+    confirm_payload.overwrite = True
+    previous = SimpleNamespace(
+        id=uuid4(), settled_on=date(2025, 11, 13), value=Decimal("55.90")
+    )
+    service.scheduled_service.find_by.return_value = previous
+
+    result = await service.confirm(receipt.id, user, confirm_payload)
+
+    service.scheduled_service.delete_occurrence.assert_awaited_once_with(
+        user=user, occurrence=previous
+    )
+    service.scheduled_service.add_owned.assert_awaited_once()
+    assert result.occurrence is not None
+
+
+async def test_confirm_propagates_failures_without_reporting_success(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    service.payment_service.add_owned.side_effect = RuntimeError("database failure")
 
     with (
         patch("app.core.service.base.log_service_success") as success,
@@ -534,15 +649,12 @@ async def test_confirm_propagates_failures_without_reporting_success(
     ):
         await service.confirm(receipt.id, user, confirm_payload)
 
-    assert caught.value.status_code == expected_status
+    assert caught.value.status_code == 500
+    service.repository.save.assert_not_awaited()
+    assert receipt.status != ReceiptStatusEnum.PROCESSED
     assert all(
         entry.kwargs["operation"] != "confirm" for entry in success.call_args_list
     )
-    if failure not in ("create", "save"):
-        service.payment_service.create_payment.assert_not_awaited()
-    if failure != "save":
-        service.repository.save.assert_not_awaited()
-        assert receipt.status != ReceiptStatusEnum.PROCESSED
 
 
 @pytest.mark.parametrize(
@@ -770,3 +882,47 @@ async def test_update_receipt_preserves_category_sent_in_payload(
         "value": "Utilities",
         "status": DataStatusEnum.FOUND.value,
     }
+
+
+async def test_confirm_invalidates_entry_caches_only_after_commit(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+    events = []
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+        events.append("commit")
+
+    async def invalidate(_user, _entity, operation):
+        events.append(f"invalidate:{operation}")
+
+    service.repository.transaction = transaction
+    service.transaction_service._invalidate_cache.side_effect = invalidate
+    service.series_service._invalidate_cache.side_effect = invalidate
+    service.scheduled_service._invalidate_cache.side_effect = invalidate
+
+    await service.confirm(receipt.id, user, confirm_payload)
+
+    assert events == ["commit", "invalidate:confirm"]
+
+
+async def test_confirm_does_not_invalidate_caches_when_the_commit_fails(
+    confirmation_service, receipt, user, confirm_payload
+):
+    service = confirmation_service
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+        raise RuntimeError("commit failed")
+
+    service.repository.transaction = transaction
+
+    with pytest.raises(HTTPException):
+        await service.confirm(receipt.id, user, confirm_payload)
+
+    service.transaction_service._invalidate_cache.assert_not_awaited()
+    service.series_service._invalidate_cache.assert_not_awaited()
+    service.scheduled_service._invalidate_cache.assert_not_awaited()

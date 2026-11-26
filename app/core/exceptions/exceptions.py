@@ -15,7 +15,7 @@ STATUS_MESSAGE_MAP: dict[HTTPStatus, str] = {
 
 
 class AppHTTPException(HTTPException):
-    def __init__(self, status_code: HTTPStatus, detail: str):
+    def __init__(self, status_code: HTTPStatus, detail: object):
         super().__init__(status_code=status_code, detail=detail)
 
 
@@ -40,10 +40,12 @@ def _resolve_status_code(exception: Exception) -> HTTPStatus:
     return HTTPStatus.INTERNAL_SERVER_ERROR
 
 
-def _build_error_message(exception: Exception, status_code: HTTPStatus) -> str:
+def _build_error_message(exception: Exception, status_code: HTTPStatus) -> object:
     if isinstance(exception, HTTPException):
         detail = exception.detail
         if isinstance(detail, str) and detail:
+            return detail
+        if isinstance(detail, (dict, list)) and detail:
             return detail
 
     return STATUS_MESSAGE_MAP.get(status_code, status_code.phrase)
@@ -57,7 +59,7 @@ def handle_service_exception(
     operation: str,
     raise_exception: bool = True,
     user_request: str | None = None,
-) -> tuple[HTTPStatus, str] | None:
+) -> tuple[HTTPStatus, object] | None:
 
     status_code = _resolve_status_code(exception)
     error_message = _build_error_message(exception, status_code)
@@ -68,7 +70,7 @@ def handle_service_exception(
         service=service,
         operation=operation,
         status_code=status_code,
-        message=error_message,
+        message=error_message if isinstance(error_message, str) else str(error_message),
         user_request=user_request,
     )
 

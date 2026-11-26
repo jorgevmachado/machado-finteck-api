@@ -36,7 +36,9 @@ COMPLETE_PAYLOAD: dict[str, object] = {
 
 SCHEMA_PAYLOAD: dict[str, object] = {
     **COMPLETE_PAYLOAD,
+    "name": "Netflix",
     "subcategory_id": str(uuid4()),
+    "account_id": str(uuid4()),
 }
 
 

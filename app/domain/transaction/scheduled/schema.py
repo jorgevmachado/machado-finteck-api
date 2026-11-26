@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from app.domain.account.schema import AccountSchema
 from app.domain.category import SubcategorySchema
 from app.domain.credit_card.schema import CreditCardSchema
+from app.domain.receipt.payment.schema import PaymentSchema
 from app.domain.transaction.series.schema import TransactionSeriesSchema
 from app.models import TransactionDirectionEnum, TransactionStatusEnum
 
@@ -28,6 +29,7 @@ class ScheduledTransactionSchema(BaseModel):
     occurrence_on: date
     occurrence_index: int
     transaction_serie: TransactionSeriesSchema
+    receipt_payment: PaymentSchema | None = None
     created_at: datetime
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
@@ -46,6 +48,7 @@ class ScheduledTransactionRequestCreateSchema(BaseModel):
     occurrence_index: int
     credit_card_id: UUID | None = None
     subcategory_id: UUID | None = None
+    receipt_payment_id: UUID | None = None
 
 
 class ScheduledTransactionRequestUpdateSchema(ScheduledTransactionRequestCreateSchema):

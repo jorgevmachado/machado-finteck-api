@@ -10,7 +10,7 @@ import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import Column, MetaData, String, Table, event, select
+from sqlalchemy import JSON, Column, MetaData, String, Table, event, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.database import get_session
@@ -31,8 +31,13 @@ from app.domain.transaction.statement.schema import (
 from app.domain.transaction.statement.service import StatementService
 from app.models import (
     Account,
+    Beneficiary,
     Category,
     CreditCard,
+    Institution,
+    Payer,
+    Payment,
+    Receipt,
     ScheduledTransaction,
     Subcategory,
     Transaction,
@@ -330,6 +335,10 @@ async def statement_session():
                     ScheduledTransaction.__table__,
                     Account.__table__,
                     CreditCard.__table__,
+                    Payer.__table__,
+                    Beneficiary.__table__,
+                    Institution.__table__,
+                    Payment.__table__,
                 ],
             )
         )
@@ -359,6 +368,19 @@ async def statement_session():
                 for column in Subcategory.__table__.columns
             ),
         )
+        # `receipts.data` is JSONB on PostgreSQL; SQLite only knows plain JSON.
+        Table(
+            "receipts",
+            metadata,
+            *(
+                Column(
+                    column.name,
+                    JSON() if column.name == "data" else column.type,
+                    primary_key=column.primary_key,
+                )
+                for column in Receipt.__table__.columns
+            ),
+        )
         await connection.run_sync(metadata.create_all)
     async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
@@ -377,6 +399,47 @@ def make_transaction(user_id, account_id, **kwargs):
         }
     )
     return Transaction(user_id=user_id, **payload.model_dump())
+
+
+def make_payment(user_id, subcategory_id=None):
+    """A payment with every relation `PaymentSchema` reads, ready to be linked."""
+    payer = Payer(user_id=user_id, name="Payer", name_code="payer")
+    beneficiary = Beneficiary(
+        user_id=user_id, name="Beneficiary", name_code="beneficiary"
+    )
+    source = Institution(user_id=user_id, name="Source bank", name_code="source_bank")
+    destination = Institution(
+        user_id=user_id, name="Destination bank", name_code="destination_bank"
+    )
+    receipt = Receipt(
+        user_id=user_id,
+        file_name="receipt.pdf",
+        file_type="application/pdf",
+        file_size=7,
+        file_hash="a" * 64,
+        status="PROCESSED",
+        data=None,
+    )
+    subcategory = make_subcategory(subcategory_id or uuid4(), user_id=user_id)
+    payment = Payment(
+        user_id=user_id,
+        receipt_id=receipt.id,
+        payer_id=payer.id,
+        amount=Decimal("50.00"),
+        payment_date=date(2026, 11, 15),
+        beneficiary_id=beneficiary.id,
+        subcategory_id=subcategory.id,
+        source_institution_id=source.id,
+        description=None,
+        destination_institution_id=destination.id,
+    )
+    payment.receipt = receipt
+    payment.payer = payer
+    payment.beneficiary = beneficiary
+    payment.subcategory = subcategory
+    payment.source_institution = source
+    payment.destination_institution = destination
+    return payment, [payer, beneficiary, source, destination, receipt]
 
 
 def make_scheduled(entity, **kwargs):
@@ -1047,6 +1110,20 @@ async def test_repository_loads_relations_before_synchronous_serialization(
     assert scheduled_dto.transaction_serie.subcategory.name == "Groceries"
 
 
+def _loaded_paths(query):
+    """Chaves dos caminhos carregados explicitamente, ex.: ("receipt_payment", "payer").
+
+    Cada `orm.Path` alterna entidade e relação, então as relações ficam nos índices
+    ímpares. `lazyload("*")` também aparece em `_with_options`, mas seu `path` é uma
+    tupla de atributos, não um `orm.Path` — por isso o filtro é por `path.path`.
+    """
+    return {
+        tuple(step.key for step in option.path.path[1::2])
+        for option in query._with_options
+        if hasattr(getattr(option, "path", None), "path")
+    }
+
+
 @pytest.mark.asyncio
 async def test_repository_eager_loads_the_linked_receipt_payment(user):
     """`receipt_payment` precisa vir carregado: a serialização do DTO é síncrona."""
@@ -1057,15 +1134,73 @@ async def test_repository_eager_loads_the_linked_receipt_payment(user):
     await StatementRepository(session).transactions(user_id=user.id, filters=period())
 
     query = session.scalars.await_args.args[0]
-    # `lazyload("*")` também aparece em `_with_options`, mas seu `path` é uma tupla de
-    # atributos, não um `orm.Path` — por isso o filtro é por `path.path`.
-    loaded = {
-        option.path.path[1].key
-        for option in query._with_options
-        if hasattr(getattr(option, "path", None), "path")
+    loaded = _loaded_paths(query)
+
+    assert loaded == {
+        ("account",),
+        ("credit_card",),
+        ("subcategory", "category"),
+        ("receipt_payment", "beneficiary"),
+        ("receipt_payment", "destination_institution"),
+        ("receipt_payment", "payer"),
+        ("receipt_payment", "receipt"),
+        ("receipt_payment", "source_institution"),
+        ("receipt_payment", "subcategory"),
     }
 
-    assert loaded == {"account", "credit_card", "receipt_payment", "subcategory"}
+
+@pytest.mark.asyncio
+async def test_scheduled_repository_eager_loads_the_linked_receipt_payment(user):
+    """A ocorrência agendada serializa o mesmo `PaymentSchema`, então precisa do mesmo."""
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.execute.return_value.all.return_value = []
+
+    await StatementRepository(session).scheduled(
+        user_id=user.id, filters=period(), projected_ranges={}
+    )
+
+    query = session.execute.await_args.args[0]
+    loaded = _loaded_paths(query)
+
+    assert {path for path in loaded if path and path[0] == "receipt_payment"} == {
+        ("receipt_payment", "beneficiary"),
+        ("receipt_payment", "destination_institution"),
+        ("receipt_payment", "payer"),
+        ("receipt_payment", "receipt"),
+        ("receipt_payment", "source_institution"),
+        ("receipt_payment", "subcategory"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_transaction_linked_to_a_payment_serializes_without_lazy_io(
+    statement_session, user
+):
+    """Regressão: sem eager load das relações do pagamento, `model_validate` dispara
+    lazy load fora do greenlet e o statement responde 500 (`MissingGreenlet`).
+    """
+    account_id = uuid4()
+    payment, payment_relations = make_payment(user.id, subcategory_id=uuid4())
+    transaction = make_transaction(user.id, account_id, receipt_payment_id=payment.id)
+    transaction.account = make_account(user.id, account_id)
+    statement_session.add_all([payment, *payment_relations, transaction])
+    await statement_session.commit()
+    statement_session.expunge_all()
+
+    loaded = await StatementRepository(statement_session).transactions(
+        user_id=user.id, filters=period()
+    )
+    dto = StatementEntrySchema.model_validate(loaded[0])
+
+    assert dto.receipt_payment is not None
+    assert dto.receipt_payment.payer.name == "Payer"
+    assert dto.receipt_payment.beneficiary.name == "Beneficiary"
+    assert dto.receipt_payment.source_institution.name == "Source bank"
+    assert dto.receipt_payment.destination_institution is not None
+    assert dto.receipt_payment.destination_institution.name == "Destination bank"
+    assert dto.receipt_payment.receipt.file_name == "receipt.pdf"
+    assert dto.receipt_payment.subcategory.name == "Groceries"
 
 
 @pytest.mark.asyncio

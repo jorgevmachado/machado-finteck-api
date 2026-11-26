@@ -14,10 +14,13 @@ class ScheduledTransactionRepository(BaseRepository[ScheduledTransaction]):
         "transaction_series_id",
         "direction",
         "status",
+        "occurrence_index",
+        "occurrence_on",
     )
     relations = (
         selectinload(ScheduledTransaction.account),
         selectinload(ScheduledTransaction.subcategory),
         selectinload(ScheduledTransaction.credit_card),
         selectinload(ScheduledTransaction.transaction_serie),
+        selectinload(ScheduledTransaction.receipt_payment),
     )

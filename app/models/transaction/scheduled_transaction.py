@@ -14,7 +14,7 @@ from app.models import utcnow
 from app.models.transaction.enums import TransactionDirectionEnum, TransactionStatusEnum
 
 if TYPE_CHECKING:
-    from app.models import Account, Subcategory, CreditCard, TransactionSeries
+    from app.models import Account, Subcategory, CreditCard, Payment, TransactionSeries
 
 
 @table_registry.mapped_as_dataclass
@@ -97,6 +97,16 @@ class ScheduledTransaction:
         Numeric(12, 2),
         nullable=False,
         default=Decimal("0.00"),
+    )
+
+    receipt_payment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("payments.id"), nullable=True, default=None
+    )
+
+    receipt_payment: Mapped["Payment | None"] = relationship(
+        init=False,
+        lazy=default_lazy,
+        back_populates="scheduled_transactions",
     )
 
     # Auto-generated / server-managed — excluded from __init__

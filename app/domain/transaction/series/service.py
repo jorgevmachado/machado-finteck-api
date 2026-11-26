@@ -12,7 +12,13 @@ from app.domain.transaction.series.schema import (
     TransactionSeriesSchema,
     TransactionSeriesUpdateSchema,
 )
-from app.models import TransactionSeries, TransactionFrequencyUnitEnum
+from app.models import (
+    TransactionDirectionEnum,
+    TransactionSeries,
+    TransactionFrequencyUnitEnum,
+    User,
+)
+from app.shared.utils.string import to_snake_case
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +66,33 @@ class TransactionSeriesService(
             update={"week_day": week_day, "day_of_month": day_of_month, "month": month}
         )
         return TransactionSeries(user_id=user_id, **payload.model_dump())
+
+    async def resolve_open_series(
+        self,
+        *,
+        user: User,
+        name: str,
+        account_id: UUID,
+        direction: TransactionDirectionEnum,
+    ) -> TransactionSeries | None:
+        """Find the open series a confirmed recurrence belongs to.
+
+        Matches on normalized name, account and direction. Closed series
+        (installments) are never candidates, so same-named installment plans do
+        not collide with a recurrence. Runs inside the caller's transaction and
+        never opens its own, so the lookup and the write that follows stay
+        atomic.
+        """
+        async with self._operation("resolve_open_series", user.username):
+            target = to_snake_case(name)
+            candidates = await self.repository.open_candidates(
+                user_id=user.id, account_id=account_id, direction=direction
+            )
+            return next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if to_snake_case(candidate.name) == target
+                ),
+                None,
+            )

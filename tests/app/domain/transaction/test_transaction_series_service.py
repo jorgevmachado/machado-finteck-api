@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -108,3 +109,64 @@ async def test_factory_builds_series_repository(transaction_session):
     service = TransactionSeriesService.from_session(transaction_session)
     assert service.repository.session is transaction_session
     assert service.repository.model.__name__ == "TransactionSeries"
+
+
+def _series(*, name):
+    return SimpleNamespace(name=name)
+
+
+@pytest.mark.parametrize(
+    ("stored_name", "incoming_name"),
+    [
+        ("Netflix", "netflix"),
+        ("NETFLIX", "  Netflix "),
+        ("Netflíx", "Netflix"),
+    ],
+)
+async def test_resolve_open_series_matches_normalized_name(
+    series_service, transaction_repository, user, stored_name, incoming_name
+):
+    account_id = uuid4()
+    existing = _series(name=stored_name)
+    transaction_repository.open_candidates = AsyncMock(return_value=[existing])
+
+    result = await series_service.resolve_open_series(
+        user=user, name=incoming_name, account_id=account_id, direction="OUT"
+    )
+
+    assert result is existing
+    transaction_repository.open_candidates.assert_awaited_once_with(
+        user_id=user.id, account_id=account_id, direction="OUT"
+    )
+    transaction_repository.save.assert_not_awaited()
+    transaction_repository.transaction.assert_not_called()
+
+
+async def test_resolve_open_series_returns_none_when_no_open_series_matches(
+    series_service, transaction_repository, user
+):
+    account_id = uuid4()
+    transaction_repository.open_candidates = AsyncMock(
+        return_value=[_series(name="Spotify")]
+    )
+
+    result = await series_service.resolve_open_series(
+        user=user, name="Netflix", account_id=account_id, direction="OUT"
+    )
+
+    assert result is None
+
+
+async def test_resolve_open_series_scopes_candidates_to_owner_account_and_direction(
+    series_service, transaction_repository, user
+):
+    account_id = uuid4()
+    transaction_repository.open_candidates = AsyncMock(return_value=[])
+
+    await series_service.resolve_open_series(
+        user=user, name="Notebook", account_id=account_id, direction="OUT"
+    )
+
+    transaction_repository.open_candidates.assert_awaited_once_with(
+        user_id=user.id, account_id=account_id, direction="OUT"
+    )

@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,7 +12,13 @@ from app.domain.transaction.scheduled.schema import (
     ScheduledTransactionSchema,
     ScheduledTransactionUpdateSchema,
 )
-from app.models import TransactionDirectionEnum, TransactionStatusEnum
+from app.models import (
+    ReceiptStatusEnum,
+    TransactionDirectionEnum,
+    TransactionStatusEnum,
+    utcnow,
+)
+from app.shared.utils.string import to_snake_case
 
 
 def test_create_parses_dates_identifiers_and_defaults(scheduled_data):
@@ -106,3 +113,60 @@ def test_response_serializes_nested_relations_and_money(scheduled_response):
         result["transaction_serie"]["id"]
         == scheduled_response["transaction_serie"]["id"]
     )
+
+
+def _named_entity(identifier, name):
+    return SimpleNamespace(
+        id=identifier, name=name, name_code=to_snake_case(name), created_at=utcnow()
+    )
+
+
+@pytest.fixture
+def receipt_payment_output():
+    return SimpleNamespace(
+        id=uuid4(),
+        amount=Decimal("125.90"),
+        payer=_named_entity(uuid4(), "Payer"),
+        receipt=SimpleNamespace(
+            id=uuid4(),
+            status=ReceiptStatusEnum.PROCESSED,
+            file_name="receipt.pdf",
+            file_type="application/pdf",
+            file_size=7,
+            created_at=utcnow(),
+        ),
+        subcategory=SimpleNamespace(
+            id=uuid4(),
+            name="Streaming",
+            icon=None,
+            color=None,
+            is_active=True,
+            order=1,
+            created_at=utcnow(),
+        ),
+        beneficiary=_named_entity(uuid4(), "Beneficiary"),
+        payment_date=date(2026, 11, 10),
+        source_institution=_named_entity(uuid4(), "Source"),
+        description="Netflix November",
+        destination_institution=None,
+        created_at=utcnow(),
+    )
+
+
+def test_response_serializes_receipt_payment_link(
+    scheduled_response, receipt_payment_output
+):
+    response = scheduled_response | {"receipt_payment": receipt_payment_output}
+    result = ScheduledTransactionSchema.model_validate(response).model_dump(mode="json")
+    assert result["receipt_payment"]["id"] == str(receipt_payment_output.id)
+    assert result["receipt_payment"]["amount"] == "125.90"
+    assert result["receipt_payment"]["receipt"]["status"] == "PROCESSED"
+
+
+def test_response_keeps_receipt_payment_null_when_occurrence_has_no_payment(
+    scheduled_response,
+):
+    result = ScheduledTransactionSchema.model_validate(
+        scheduled_response | {"receipt_payment": None}
+    ).model_dump(mode="json")
+    assert result["receipt_payment"] is None

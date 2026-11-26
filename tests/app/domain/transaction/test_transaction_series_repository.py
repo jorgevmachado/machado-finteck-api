@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.domain.transaction.series.repository import TransactionSeriesRepository
+from app.models import TransactionDirectionEnum, TransactionKindEnum
 from app.shared.schemas import FilterPage
 
 pytestmark = pytest.mark.asyncio
@@ -72,6 +73,49 @@ async def test_lookup_rejects_unsupported_filters_before_sql(
             user_id=user.id, filters=filters
         )
     transaction_session.scalars.assert_not_awaited()
+
+
+async def test_open_candidates_narrows_by_owner_account_direction_and_kind(
+    transaction_session, user
+):
+    transaction_session.scalars.return_value.unique.return_value.all.return_value = []
+    account_id = uuid4()
+
+    await TransactionSeriesRepository(transaction_session).open_candidates(
+        user_id=user.id, account_id=account_id, direction=TransactionDirectionEnum.OUT
+    )
+
+    compiled = transaction_session.scalars.await_args.args[0].compile(
+        dialect=postgresql.dialect()
+    )
+    rendered = str(compiled)
+    assert "transaction_series.user_id =" in rendered
+    assert "transaction_series.deleted_at IS NULL" in rendered
+    assert "transaction_series.account_id =" in rendered
+    assert "transaction_series.direction =" in rendered
+    assert "transaction_series.kind =" in rendered
+    assert user.id in compiled.params.values()
+    assert account_id in compiled.params.values()
+    assert TransactionDirectionEnum.OUT in compiled.params.values()
+    assert TransactionKindEnum.OPEN in compiled.params.values()
+
+
+async def test_open_candidates_never_returns_closed_installment_series(
+    transaction_session, user
+):
+    transaction_session.scalars.return_value.unique.return_value.all.return_value = []
+
+    await TransactionSeriesRepository(transaction_session).open_candidates(
+        user_id=user.id, account_id=uuid4(), direction=TransactionDirectionEnum.OUT
+    )
+
+    rendered = str(
+        transaction_session.scalars.await_args.args[0].compile(
+            dialect=postgresql.dialect()
+        )
+    )
+    assert "transaction_series.kind !=" not in rendered
+    assert "transaction_series.kind =" in rendered
 
 
 async def test_save_requires_transaction(transaction_session, series_entity, user):

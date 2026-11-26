@@ -1,3 +1,4 @@
+from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -250,6 +251,87 @@ async def test_success_only_after_commit(service, user):
     ):
         await service.create(user, ItemCreate(name="Name"))
     assert events == ["commit", "success"]
+
+
+async def test_create_delegates_to_add_owned_and_invalidates_cache_after_commit(
+    service, user
+):
+    events = []
+    session = service.repository.session
+    original_commit = session.commit
+
+    async def commit():
+        events.append("commit")
+        await original_commit()
+
+    async def invalidate(*_args, **_kwargs):
+        events.append("invalidate")
+
+    with (
+        patch.object(session, "commit", side_effect=commit),
+        patch.object(service, "add_owned", wraps=service.add_owned) as add_owned,
+        patch.object(service, "_invalidate_cache", side_effect=invalidate),
+    ):
+        entity = await service.create(user, ItemCreate(name="Delegated"))
+
+    add_owned.assert_awaited_once()
+    assert entity.name == "Delegated"
+    assert events == ["commit", "invalidate"]
+    assert await service.find_by(user=user, filters={"id": entity.id}) is not None
+
+
+async def test_create_rejects_managed_fields_inside_add_owned(service, user):
+    class UnsafePayload(BaseModel):
+        model_config = {"extra": "allow"}
+
+    payload = UnsafePayload.model_validate({"name": "x", "user_id": str(uuid4())})
+    with (
+        patch.object(service, "add_owned", wraps=service.add_owned) as add_owned,
+        patch.object(service.repository, "save") as save,
+        pytest.raises(HTTPException) as caught,
+    ):
+        await service.create(user, payload)
+
+    assert caught.value.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
+    assert "user_id" in caught.value.detail
+    add_owned.assert_awaited_once()
+    save.assert_not_awaited()
+
+
+async def test_add_owned_composes_inside_an_open_transaction_and_rollback_discards_it(
+    service, user, session
+):
+    identifier = None
+    with pytest.raises(RuntimeError, match="outer rollback"):
+        async with service.repository.transaction():
+            entity = await service.add_owned(user, ItemCreate(name="Atomic"))
+            identifier = entity.id
+            assert await session.scalar(select(Item.id).where(Item.id == identifier))
+            raise RuntimeError("outer rollback")
+
+    assert identifier is not None
+    assert await session.scalar(select(Item.id).where(Item.id == identifier)) is None
+
+
+async def test_add_owned_does_not_commit_nor_invalidate_cache_on_its_own(service, user):
+    session = service.repository.session
+    original_commit = session.commit
+
+    async def commit():
+        commits.append("commit")
+        await original_commit()
+
+    commits = []
+    with (
+        patch.object(session, "commit", side_effect=commit),
+        patch.object(service, "_invalidate_cache") as invalidate,
+    ):
+        async with service.repository.transaction():
+            await service.add_owned(user, ItemCreate(name="Caller commits"))
+            assert commits == []
+
+    assert commits == ["commit"]
+    invalidate.assert_not_called()
 
 
 class NormalizedItemService(ItemService):

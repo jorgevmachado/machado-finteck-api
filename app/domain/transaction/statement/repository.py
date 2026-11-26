@@ -1,11 +1,13 @@
 from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import contains_eager, lazyload, selectinload
+from sqlalchemy.orm import Load, contains_eager, lazyload, selectinload
 
 from app.core.repository import BaseRepository
 from app.models import (
+    Payment,
     ScheduledTransaction,
     Subcategory,
     Transaction,
@@ -13,6 +15,28 @@ from app.models import (
 )
 
 from app.domain.transaction.statement.schema import StatementFilterSchema
+
+_PAYMENT_RELATIONS = (
+    Payment.beneficiary,
+    Payment.destination_institution,
+    Payment.payer,
+    Payment.receipt,
+    Payment.source_institution,
+    Payment.subcategory,
+)
+
+
+def _receipt_payment_options(relationship: Any) -> tuple[Load, ...]:
+    """Carrega as relações que o `PaymentSchema` lê do pagamento vinculado.
+
+    `lazyload("*")` desliga o `selectin` padrão dos models em todos os níveis, então
+    cada relação do pagamento precisa ser pedida explicitamente — sem isso a
+    serialização do DTO dispara IO fora do greenlet (`MissingGreenlet`).
+    """
+    return tuple(
+        selectinload(relationship).selectinload(relation)
+        for relation in _PAYMENT_RELATIONS
+    )
 
 
 class StatementRepository(BaseRepository[Transaction]):
@@ -29,10 +53,10 @@ class StatementRepository(BaseRepository[Transaction]):
                     lazyload("*"),
                     selectinload(Transaction.account),
                     selectinload(Transaction.credit_card),
-                    selectinload(Transaction.receipt_payment),
                     selectinload(Transaction.subcategory).selectinload(
                         Subcategory.category
                     ),
+                    *_receipt_payment_options(Transaction.receipt_payment),
                 )
                 .where(
                     Transaction.user_id == user_id,
@@ -99,6 +123,7 @@ class StatementRepository(BaseRepository[Transaction]):
                 selectinload(ScheduledTransaction.subcategory).selectinload(
                     Subcategory.category
                 ),
+                *_receipt_payment_options(ScheduledTransaction.receipt_payment),
                 contains_eager(ScheduledTransaction.transaction_serie).selectinload(
                     TransactionSeries.account
                 ),

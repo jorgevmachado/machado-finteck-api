@@ -14,13 +14,17 @@ from app.domain.receipt.schema import (
     BatchReceiptSchema,
     ReceiptSchema,
     ReceiptConfirmSchema,
+    ReceiptUpdateSchema,
+)
+from app.domain.receipt.confirm_schema import (
+    ReceiptConfirmConflictSchema,
+    ReceiptConfirmResultSchema,
 )
 from app.models import User
 from app.shared.schemas import FilterPage
 
 from app.domain.receipt.rules.route import router as receipt_rules_router
 from app.domain.receipt.payment.route import router as receipt_payment_router
-from app.domain.receipt.payment.schema import PaymentSchema
 
 router = APIRouter()
 
@@ -86,7 +90,18 @@ async def find_one(receipt_id: UUID, service: Service, current_user: CurrentUser
 
 
 @router.post(
-    "/{receipt_id}/confirm", response_model=PaymentSchema, status_code=HTTPStatus.OK
+    "/{receipt_id}/confirm",
+    response_model=ReceiptConfirmResultSchema,
+    status_code=HTTPStatus.OK,
+    responses={
+        HTTPStatus.CONFLICT: {
+            "model": ReceiptConfirmConflictSchema,
+            "description": (
+                "Occurrence already settled (overwritable with `overwrite: true`) "
+                "or receipt already processed (not overwritable)"
+            ),
+        }
+    },
 )
 async def confirm_receipt(
     receipt_id: UUID,
@@ -104,7 +119,7 @@ async def update_receipt(
     receipt_id: UUID,
     service: Service,
     current_user: CurrentUser,
-    payload: ReceiptConfirmSchema,
+    payload: ReceiptUpdateSchema,
 ):
     return await service.update_receipt(
         receipt_id=receipt_id, user=current_user, payload=payload

@@ -55,6 +55,17 @@ class ScheduledTransactionService(
 
         return ScheduledTransaction(user_id=user_id, **payload.model_dump())
 
+    async def delete_occurrence(
+        self, *, user: User, occurrence: ScheduledTransaction
+    ) -> None:
+        """Remove an occurrence inside the caller's transaction.
+
+        Used by the receipt confirmation when the user consents to replacing an
+        already-settled occurrence: the previous entry stops representing that
+        date before the new one is written, keeping one entry per occurrence.
+        """
+        await self.repository.delete(occurrence, user_id=user.id)
+
     async def delete_scheduled(
         self, user: User, identifier: UUID | str, transaction_series_id: UUID
     ) -> Message:
